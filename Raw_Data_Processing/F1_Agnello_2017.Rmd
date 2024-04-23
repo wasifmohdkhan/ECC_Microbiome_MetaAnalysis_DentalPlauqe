@@ -1,0 +1,159 @@
+---
+title: "R Notebook for Agnello_2017 raw data processing"
+output: html_notebook
+---
+
+```{r}
+rm(llist = ls())
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+```
+
+```{bash}
+# sort is required before uniq command
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_clean_fasta_files
+cat Caries_plaque1.fna| grep '>' | cut -d "_" -f 1 | cut -d ">" -f 2 | sort | uniq -c > uniq_samples_in_Caries_plaque1_fna.txt
+cat Caries_plaque2.fna| grep '>' | cut -d "_" -f 1 | cut -d ">" -f 2 | sort | uniq -c > uniq_samples_in_Caries_plaque2_fna.txt
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_clean_fasta_files
+cat Caries_plaque1.fna Caries_plaque2.fna > ../Agnello_2017.fna
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+cat Agnello_2017.fna | grep '>' | cut -d "_" -f 1 | cut -d ">" -f 2 | sort | uniq -c > uniq_samples_in_Agnello_2017_fna.txt
+# p1			caries-free
+#P.15			caries-free
+#P.16			caries-free
+#P.17			caries-free
+#P.18			caries-free
+#P.19			caries-free
+
+# change these to bring consistency to p##
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+sed -i 's/>P./>p/g' ./Agnello_2017.fna 
+cat Agnello_2017.fna | grep '>' | cut -d "_" -f 1 | cut -d ">" -f 2 | sort | uniq -c > uniq_samples_in_Agnello_2017_fna_2.txt
+# to check the length of the longest read
+wc -L ./Agnello_2017.fna # 432
+
+
+```
+
+
+# Make metadata
+```{r}
+Agnello_2017_mapping = read.delim("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_Caries_mapping_file.txt",
+                                  comment.char = "#", header = F)
+Agnello_2017_mapping
+
+Agnello_2017_metadata = Agnello_2017_mapping %>% 
+  select(V1, V4) %>% 
+  rename(sampleid= V1) %>% 
+  rename(Disease_status= V4)
+Agnello_2017_metadata
+
+Agnello_2017_metadata = Agnello_2017_metadata %>%
+  mutate(Host_age = NA) %>% 
+  mutate(Host_sex = NA) %>% 
+  mutate(Sample_type = "Plaque") %>% 
+  mutate(Geo_location = "Winnipeg_CAN") %>% 
+  mutate(Study_name = "Agnello_2017")
+Agnello_2017_metadata
+
+Agnello_2017_metadata = Agnello_2017_metadata %>%
+  mutate(Disease_status = str_replace(Disease_status, 'caries-free', "CF")) %>%
+  mutate(Disease_status = str_replace(Disease_status, "ECC", "SECC")) %>%
+  mutate(sampleid = str_replace(sampleid, "P.", "p"))
+Agnello_2017_metadata
+
+write.table(Agnello_2017_metadata,
+            "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_qiime_metadata.txt",
+            row.names = F, sep = "\t", quote = F)
+```
+
+```{bash}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime tools import \
+--input-path ./Agnello_2017.fna \
+--output-path ./Agnello_2017_fna.qza \
+--type 'SampleData[Sequences]'
+
+# real    1m30.561s
+# the size of qza file after sequence import was 10 times smaller so will work on qiime tutorial to see if this is okay
+## https://docs.qiime2.org/2018.4/tutorials/otu-clustering/
+
+# so yes when we import fastA file the size of qza file is reduced. but that is not the case with FASTQ files.
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime vsearch dereplicate-sequences \
+  --i-sequences ./Agnello_2017_fna.qza \
+  --o-dereplicated-table ./Agnello_2017_table.qza \
+  --o-dereplicated-sequences ./Agnello_2017_rep_seqs.qza
+
+#real    1m30.389s
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime vsearch cluster-features-de-novo \
+  --i-table ./Agnello_2017_table.qza \
+  --i-sequences ./Agnello_2017_rep_seqs.qza \
+  --p-perc-identity 0.99 \
+  --o-clustered-table ./Agnello_2017_table-dn-99.qza \
+  --o-clustered-sequences ./Agnello_2017_rep-seqs-dn-99.qza \
+  --p-threads 6
+  
+
+# extract reads from the full fasta file
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime feature-classifier extract-reads \
+  --i-sequences /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.fasta.qza \
+  --p-f-primer CCTACGGGNGGCWGCAG \
+  --p-r-primer GACTACHVGGGTATCTAATCC \
+  --p-trunc-len 460 \
+  --o-reads ./F341_R785_HOMD_V15.22_extract_ref_seqs.qza \
+  --p-n-jobs 6
+
+# fit classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ./F341_R785_HOMD_V15.22_extract_ref_seqs.qza \
+  --i-reference-taxonomy /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.qiime_g_s_combined.taxonomy.qza \
+  --o-classifier ./F341_R785_HOMD_V15.22_classifier.qza
+# feature classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+time qiime feature-classifier classify-sklearn \
+--i-classifier ./F341_R785_HOMD_V15.22_classifier.qza \
+--i-reads ./Agnello_2017_rep-seqs-dn-99.qza \
+--o-classification ./Agnello_2017_HOMD_15_22_taxonomy.qza \
+--p-n-jobs 4
+
+# features in qzv
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+qiime taxa barplot \
+  --i-table ./Agnello_2017_table-dn-99.qza  \
+  --i-taxonomy ./Agnello_2017_HOMD_15_22_taxonomy.qza \
+  --m-metadata-file ./Agnello_2017_qiime_metadata.txt \
+  --o-visualization ./Agnello_2017_taxa_bar_plots.qzv
+
+# dir for features
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017
+rm -r ./Agnello_2017_extracted-feature-table
+mkdir ./Agnello_2017_extracted-feature-table
+# feature extraction
+qiime tools extract \
+  --input-path ./Agnello_2017_taxa_bar_plots.qzv \
+  --output-path ./Agnello_2017_extracted-feature-table
+
+# copy
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_extracted-feature-table/2ff0ae32-9886-4985-911d-c336a2ced6e9/data/level-7.csv \
+./Agnello_2017_level-7.csv
+
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Agnello_2017/Agnello_2017_extracted-feature-table/2ff0ae32-9886-4985-911d-c336a2ced6e9/data/level-6.csv \
+./Agnello_2017_level-6.csv
+```
+
+
+```{r}
+# # bar graph for 
+# source("/home/wasif/R_scripts_by_me/Plot_qiime_level7_otu_to_tax_prop.R")
+```
+ 
