@@ -1,0 +1,128 @@
+---
+title: "Plaque_Species_level_raw_count_data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+rm(list = ls())
+
+```
+
+# Libraries
+```{r}
+library(dplyr)
+library(stringr)
+library(tibble)
+# library(MatrixGenerics)
+# library(phyloseq)
+# library(pROC)
+# library(ggplot2)
+# library(ggVennDiagram)
+library(DT)
+# library(mixOmics)
+library(magrittr)
+library(DECIPHER)
+library(mbImpute)
+```
+
+```{r}
+in_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis"
+out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_1_raw_files"
+```
+
+
+# load otu tables
+```{r}
+load(paste0(in_dir, "/DeJesus_2020_otu_meta_rdata.RData"))
+load(paste0(in_dir, "/Kalpana_2020_otu_meta_rdata.RData"))
+load(paste0(in_dir, "/Teng_2015_otu_meta_rdata.RData"))
+load(paste0(in_dir, "/Gomez_2017_otu_meta_rdata.RData"))
+load(paste0(in_dir, "/Agnello_2017_otu_meta_rdata.RData"))
+#load("/home/wasif/Plaque_metagenome_meta_analysis/Combine_plaque_SECC_analysis_160621_Rproj/Ma_2015_otu_meta_rdata.RData")
+DeJesus_2020_otu = DeJesus_2020_otu_meta_rdata[[1]] %>% rownames_to_column("OTUs")
+DeJesus_2020_otu %>% datatable()
+Kalpana_2020_otu = Kalpana_2020_otu_meta_rdata[[1]] %>% rownames_to_column("OTUs")
+Kalpana_2020_otu
+Teng_2015_otu = Teng_2015_otu_meta_rdata[[1]] %>% rownames_to_column("OTUs")
+Teng_2015_otu
+Gomez_2017_otu= Gomez_2017_otu_meta_rdata[[1]] %>% rownames_to_column("OTUs")
+Gomez_2017_otu
+Agnello_2017_otu= Agnello_2017_otu_meta_rdata[[1]] %>% rownames_to_column("OTUs")
+Agnello_2017_otu
+```
+
+# join all otu tables
+```{r}
+Joined_All_Species_otu = full_join(DeJesus_2020_otu, Kalpana_2020_otu) %>% 
+  full_join(.,  Teng_2015_otu) %>% 
+  full_join(., Gomez_2017_otu) %>% 
+  full_join(., Agnello_2017_otu)
+Joined_All_Species_otu[is.na(Joined_All_Species_otu)] = 0
+Joined_All_Species_otu = Joined_All_Species_otu %>% 
+  column_to_rownames("OTUs") %>% 
+  # to bring library size to 10^6
+  #mutate_all(., function(x) {x*10^7}) %>% 
+  #mutate_all(., function(x) {as.integer(x)}) %>% 
+  #mutate_all(., function(x) {format(round(x, 9))}) %>% 
+  t() %>% 
+  as.data.frame()
+# Arrange with sampleid
+Joined_All_Species_otu = Joined_All_Species_otu %>% 
+  rownames_to_column("sampleid") %>% 
+  arrange(sampleid) %>% 
+  column_to_rownames("sampleid")
+Joined_All_Species_otu
+```
+# join meta table with cbind
+```{r}
+DeJesus_2020_otu_meta_rdata[[2]]
+Kalpana_2020_otu_meta_rdata[[2]]
+Teng_2015_otu_meta_rdata[[2]]
+Gomez_2017_otu_meta_rdata[[2]]
+Agnello_2017_otu_meta_rdata[[2]]
+Joined_meta = rbind(DeJesus_2020_otu_meta_rdata[[2]],
+                    Kalpana_2020_otu_meta_rdata[[2]],
+                    Teng_2015_otu_meta_rdata[[2]],
+                    Gomez_2017_otu_meta_rdata[[2]],
+                    Agnello_2017_otu_meta_rdata[[2]])
+Joined_meta
+# some modifications in Joined meta
+Joined_meta = Joined_meta %>% 
+  #rownames_to_column("sampleid") %>% 
+  mutate(Disease_status = str_replace(Disease_status, "^SECC", "ECC")) %>% 
+  rownames_to_column("sampleid") %>% 
+  arrange(sampleid) %>% 
+  column_to_rownames("sampleid")
+Joined_meta
+```
+
+
+```{r}
+table(Joined_meta$Study_name, Joined_meta$Disease_status)
+```
+
+
+# Save Data
+```{r}
+Plaque_Species_raw_OTU_table_TSS = Joined_All_Species_otu %>% 
+  rownames_to_column("sampleid") 
+
+Plaque_Species_meta = Joined_meta %>% 
+  rownames_to_column("sampleid") %>% 
+  arrange(Study_name, sampleid)
+
+Plaque_Species_raw_OTU_table_TSS_with_meta_data = full_join(Plaque_Species_meta, Plaque_Species_raw_OTU_table_TSS)
+Plaque_Species_raw_OTU_table_TSS_with_meta_data
+  
+write.table(Plaque_Species_raw_OTU_table_TSS_with_meta_data,
+            paste0(out_dir, "/Plaque_Species_raw_count_OTU_table_with_meta_data.txt"),
+            row.names = F, sep = "\t", quote = F)
+```
+
+
+

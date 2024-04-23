@@ -1,0 +1,151 @@
+---
+title: "Kalpana_2020_plaque"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+rm(list = ls())
+```
+
+# Libraries
+```{r}
+library(dplyr)
+library(stringr)
+library(tibble)
+library(MatrixGenerics)
+```
+# out_dir
+```{r}
+out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis"
+```
+
+# Import Kalpana_2020
+```{r}
+Kalpana_2020_qiime_table = read.csv("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_level-7.csv", check.names = F)
+Kalpana_2020_qiime_table 
+
+Kalpana_2020_qiime_table  = Kalpana_2020_qiime_table %>% 
+  column_to_rownames("index")
+Kalpana_2020_qiime_table
+
+Kalpana_2020_otu = Kalpana_2020_qiime_table  %>% 
+  dplyr::select(-c(Disease_status,	Host_age,	Host_sex,	Sample_type,	Geo_location,	Study_name))
+Kalpana_2020_otu
+
+Kalpana_2020_meta = Kalpana_2020_qiime_table  %>% 
+  dplyr::select(c(Disease_status,	Host_age,	Host_sex,	Sample_type,	Geo_location,	Study_name))
+Kalpana_2020_meta
+```
+# RA and filter OTU table
+```{r}
+Kalpana_2020_otu_sp = Kalpana_2020_otu %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("OTUs")
+Kalpana_2020_otu_sp
+
+Kalpana_2020_otu_sp = Kalpana_2020_otu_sp %>% 
+  filter(str_detect(OTUs, "s__")) %>% 
+  mutate()
+Kalpana_2020_otu_sp
+
+Kalpana_2020_otu_sp = Kalpana_2020_otu_sp %>% 
+  mutate(OTUs = str_replace(OTUs, ".*s__", ""))
+Kalpana_2020_otu_sp
+
+Kalpana_2020_otu_sp = Kalpana_2020_otu_sp %>% 
+  column_to_rownames("OTUs") %>% 
+  as.matrix() %>% 
+  #prop.table(2) %>% 
+  as.data.frame() 
+Kalpana_2020_otu_sp
+```
+
+# function for abundance and prevalence 
+```{r}
+# otu table with samples as rownames in #for details see siamcat filter funcion
+#abundance cut off if less than this in all the samples
+abundance_prevelance_filter_function = function(otu_table,
+                                                a_cut_off = 0.00001, #abundance cut off
+                                                p_cut_off = 0.05 # prevalence cut off
+                                                ) { 
+  #abundance filter
+  otu_table_mtx = as.matrix(otu_table)
+# a_f.max <- rowMaxs(otu_table_mtx)
+  a_f.max <- rowMaxs(otu_table_mtx)/rowSums(otu_table_mtx)
+  a_f.idx <- which(a_f.max >= a_cut_off)
+  a_f.names <- rownames(otu_table_mtx)[a_f.idx]
+  a_filt.feat=otu_table_mtx[a_f.names,]
+  
+  # prevalance filter
+  p_f.idx <- which(rowSums(a_filt.feat > 0) / ncol(a_filt.feat) > p_cut_off)
+  p_f.names <- rownames(a_filt.feat)[p_f.idx]
+  p_filt.feat=a_filt.feat[p_f.names,]
+  p_filt.feat_df = as.data.frame(p_filt.feat)
+  return(p_filt.feat_df)
+                                                }
+```
+
+# Apply prevalence filter function
+```{r}
+Kalpana_2020_otu_sp_filt = abundance_prevelance_filter_function(Kalpana_2020_otu_sp)
+ Kalpana_2020_otu_sp_filt
+```
+# import Kalpana_2020 level_6
+```{r}
+Kalpana_2020_qiime_table_level_6 = read.csv("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_level-6.csv", check.names = F)
+Kalpana_2020_qiime_table_level_6 
+
+Kalpana_2020_qiime_table_level_6  = Kalpana_2020_qiime_table_level_6 %>% 
+  column_to_rownames("index")
+Kalpana_2020_qiime_table_level_6
+
+Kalpana_2020_otu_level_6 = Kalpana_2020_qiime_table_level_6  %>% 
+  dplyr::select(-c(Disease_status,	Host_age,	Host_sex,	Sample_type,	Geo_location,	Study_name))
+Kalpana_2020_otu_level_6
+
+```
+
+# RA and filter OTU table
+```{r}
+Kalpana_2020_otu_gn = Kalpana_2020_otu_level_6 %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("OTUs")
+Kalpana_2020_otu_gn
+
+Kalpana_2020_otu_gn = Kalpana_2020_otu_gn %>% 
+  filter(str_detect(OTUs, "g__")) %>% 
+  mutate()
+Kalpana_2020_otu_gn
+
+Kalpana_2020_otu_gn = Kalpana_2020_otu_gn %>% 
+  mutate(OTUs = str_replace(OTUs, ".*g__", ""))
+Kalpana_2020_otu_gn
+
+Kalpana_2020_otu_gn = Kalpana_2020_otu_gn %>% 
+  column_to_rownames("OTUs") %>% 
+  as.matrix() %>% 
+  #prop.table(2) %>% 
+  as.data.frame() 
+Kalpana_2020_otu_gn
+```
+# Apply prevalence filter function
+```{r}
+Kalpana_2020_otu_gn_filt = abundance_prevelance_filter_function(Kalpana_2020_otu_gn)
+ Kalpana_2020_otu_gn_filt
+```
+
+# make a list containing otu and meta 
+```{r}
+Kalpana_2020_otu_sp_filt
+Kalpana_2020_meta
+Kalpana_2020_otu_gn_filt
+Kalpana_2020_otu_meta_rdata = list(Kalpana_2020_otu_sp_filt, Kalpana_2020_meta, Kalpana_2020_otu_gn_filt)
+save(Kalpana_2020_otu_meta_rdata, file=paste0(out_dir, "/Kalpana_2020_otu_meta_rdata.RData"))
+```

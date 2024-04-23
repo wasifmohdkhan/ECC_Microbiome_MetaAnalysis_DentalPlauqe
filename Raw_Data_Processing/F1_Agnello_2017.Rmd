@@ -1,6 +1,6 @@
 ---
 title: "R Notebook for Agnello_2017 raw data processing"
-output: html_notebook
+output: html_document
 ---
 
 ```{r}

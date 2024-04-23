@@ -1,0 +1,220 @@
+---
+title: "Kalpana_2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+# Libraries
+```{r}
+library(dplyr)
+library(stringr)
+```
+
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/
+esearch -db sra -query PRJNA454811 | efetch -format runinfo > Kalpana_2020_PRJNA454811_metadata.txt
+
+```
+
+```{r}
+Kalpana_2020_raw_meta = read.csv(
+  "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_PRJNA454811_metadata.txt")
+Kalpana_2020_raw_meta
+
+Kalpana_2020_raw_meta = Kalpana_2020_raw_meta %>%  
+  select(Run, LibraryName)
+Kalpana_2020_raw_meta
+
+filter_str = c("SC", "CF")
+
+Kalpana_2020_raw_meta = Kalpana_2020_raw_meta %>% 
+  mutate(Disease_status = LibraryName) %>% 
+  mutate(Disease_status = str_extract(Disease_status, "[A-Z]+")) %>% # to remove the numeric part 
+  filter(Disease_status %in% filter_str) %>% 
+  mutate(Disease_status = str_replace(Disease_status, "SC", "SECC"))%>% 
+  mutate(Host_age = NA) %>% 
+  mutate(Host_sex = "Unknown")%>% 
+  mutate(Study_name = "Kalpana_2020") %>% 
+  mutate(Geo_location = "TamilNadu_IND") %>% 
+  mutate(Sample_type = "Plaque") %>% 
+  rename(sampleid = Run) %>% 
+  select(-LibraryName)
+
+Kalpana_2020_raw_meta = Kalpana_2020_raw_meta %>% 
+  relocate(sampleid, Disease_status,  Host_age, Host_sex, Sample_type, Geo_location, Study_name)
+Kalpana_2020_raw_meta
+write.table(Kalpana_2020_raw_meta,
+           "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_qiime_metadata.txt",
+           sep = "\t", row.names = F, quote = F)
+```
+
+# srr numbers
+```{r}
+Kalpana_2020_srr_only = Kalpana_2020_raw_meta %>% select(sampleid)
+write.table(Kalpana_2020_srr_only,
+           "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_srr_only.txt",
+           sep = "\t", row.names = F, quote = F, col.names = F)
+```
+
+
+# download files from NCBI using fasterq-dump
+```{bash eval = FALSE}
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_raw_reads
+
+# rm -r *.fastq
+
+while read -r line; 
+do
+if [ ! -f $line'_2.fastq' ]; then
+/home/wasif/Downloads/sratoolkit.2.9.6-ubuntu64/bin/fasterq-dump $line --split-files;
+fi
+done < /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_srr_only.txt
+
+```
+
+# Manifest file
+```{r}
+Kalpana_2020_sampleid = Kalpana_2020_raw_meta %>% select(sampleid)
+Kalpana_2020_sampleid
+
+Kalpana_2020_manifest = Kalpana_2020_sampleid %>% 
+  mutate('forward-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_raw_reads/", sampleid, "_1.fastq") ) %>% 
+  mutate('reverse-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_raw_reads/", sampleid, "_2.fastq") )
+Kalpana_2020_manifest
+write.table(Kalpana_2020_manifest,
+           "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_qiime_manifest.txt",
+           sep = "\t", row.names = F, quote = F)
+```
+
+# Import to qiime and see the reads quality befor trimming
+```{bash eval = FALSE}
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+
+time qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path ./Kalpana_2020_qiime_manifest.txt \
+  --output-path ./Kalpana_2020_demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+time qiime demux summarize \
+  --i-data ./Kalpana_2020_demux.qza \
+  --o-visualization ./Kalpana_2020_demux.qzv
+  
+```
+
+
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+for ((i=245;i<=250;i+=5))
+do
+for ((j=230;j<=245;j+=5))
+do
+echo $i
+echo $j
+
+  time qiime dada2 denoise-paired \
+    --i-demultiplexed-seqs ./Kalpana_2020_demux.qza \
+    --p-trunc-len-f $i \
+    --p-trunc-len-r $j \
+    --p-trim-left-f 5 \
+    --p-trim-left-r 5 \
+    --p-n-threads 50 \
+    --o-representative-sequences ./Kalpana_2020_"$i"_"$j"_bp_rep-seqs.qza \
+    --o-table ./Kalpana_2020_"$i"_"$j"_bp_table.qza \
+    --o-denoising-stats ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qza
+  time qiime metadata tabulate \
+    --m-input-file ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qza \
+    --o-visualization ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qzv
+  rm -r *_rep-seqs.qza
+  rm -r *_table.qza
+  rm -r *_stats-dada2.qza
+done
+done
+
+```
+
+#final one
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+i=250
+j=230
+echo $i
+echo $j
+
+  time qiime dada2 denoise-paired \
+    --i-demultiplexed-seqs ./Kalpana_2020_demux.qza \
+    --p-trunc-len-f $i \
+    --p-trunc-len-r $j \
+    --p-trim-left-f 5 \
+    --p-trim-left-r 5 \
+    --p-n-threads 5 \
+    --o-representative-sequences ./Kalpana_2020_"$i"_"$j"_bp_rep-seqs.qza \
+    --o-table ./Kalpana_2020_"$i"_"$j"_bp_table.qza \
+    --o-denoising-stats ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qza
+  time qiime metadata tabulate \
+    --m-input-file ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qza \
+    --o-visualization ./Kalpana_2020_"$i"_"$j"_bp_stats-dada2.qzv
+
+# copy these files form cpu8 to qian_cpu2
+```
+
+
+```{bash eval = FALSE}
+# extract reads from the full fasta file
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+time qiime feature-classifier extract-reads \
+  --i-sequences /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.fasta.qza \
+  --p-f-primer CCTACGGGNBGCASCAG \
+  --p-r-primer GACTACNVGGGTATCTAATCC \
+  --p-trunc-len 500 \
+  --o-reads ./F341_R805_HOMD_V15.22_extract_ref_seqs.qza \
+  --p-n-jobs 6
+
+# fit classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+time qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ./F341_R805_HOMD_V15.22_extract_ref_seqs.qza \
+  --i-reference-taxonomy /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.qiime_g_s_combined.taxonomy.qza \
+  --o-classifier ./F341_R805_HOMD_V15.22_classifier.qza
+# feature classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+i=250
+j=230
+echo $i
+echo $j
+time qiime feature-classifier classify-sklearn \
+--i-classifier ./F341_R805_HOMD_V15.22_classifier.qza \
+--i-reads ./Kalpana_2020_"$i"_"$j"_bp_rep-seqs.qza \
+--o-classification ./Kalpana_2020_HOMD_15_22_taxonomy.qza \
+--p-n-jobs 4
+
+# features in qzv
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+echo $i
+echo $j
+qiime taxa barplot \
+  --i-table ./Kalpana_2020_"$i"_"$j"_bp_table.qza  \
+  --i-taxonomy ./Kalpana_2020_HOMD_15_22_taxonomy.qza \
+  --m-metadata-file ./Kalpana_2020_qiime_metadata.txt \
+  --o-visualization ./Kalpana_2020_taxa_bar_plots.qzv
+
+# dir for features
+rm -r ./Kalpana_2020_extracted-feature-table
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+mkdir ./Kalpana_2020_extracted-feature-table
+
+# feature extraction
+qiime tools extract \
+  --input-path ./Kalpana_2020_taxa_bar_plots.qzv \
+  --output-path ./Kalpana_2020_extracted-feature-table
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Kalpana_2020/Kalpana_2020_extracted-feature-table/35beb558-d1bc-4e75-ba97-327f4747edbd/data/level-7.csv \
+./Kalpana_2020_level-7.csv
+
+```

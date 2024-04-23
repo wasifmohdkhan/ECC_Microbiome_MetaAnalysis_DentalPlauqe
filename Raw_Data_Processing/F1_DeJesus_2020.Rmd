@@ -1,0 +1,164 @@
+---
+title: "DeJesus_2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+rm(ls = list())
+```
+
+# Libraries
+```{r}
+library(dplyr)
+library(readxl)
+library(stringr)
+```
+
+
+# rename the raw fastq files for easy naming
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Raw_16s_fastq_plaque
+rename -v -n 's/MI.M00833_0709.001.FLD\d{4}.(P\d{1,2}_R[1-2].fastq.gz)/$1/' *.fastq.gz
+# remove -n and run again to run actually
+```
+
+# Read metadata file
+```{r}
+Viv_20_metadata = read_excel("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Metadata_ECC_study.xlsx")
+Viv_20_metadata
+
+Viv_20_metadata = Viv_20_metadata %>% 
+  rename(Disease_status = ECC) %>% 
+  rename(Host_age = Age) %>% 
+  rename(Host_sex = Sex) %>% 
+  mutate(Sample_type = "Plaque") %>% 
+  mutate(Geo_location = "Winnipeg_CAN") %>% 
+  mutate(Study_name = "Vivianne_2020")
+ 
+Viv_20_metadata
+Viv_20_metadata = Viv_20_metadata %>% 
+  select(sampleid, Disease_status, Host_age, Host_sex, Sample_type, Geo_location, Study_name )
+Viv_20_metadata
+
+Viv_20_metadata = Viv_20_metadata %>%
+  mutate(Disease_status = str_replace(Disease_status, "ECC", "SECC")) %>% 
+  mutate(Host_sex = str_replace(Host_sex, "F", "Female")) %>% 
+  mutate(Host_sex = str_replace(Host_sex, "M", "Male"))
+Viv_20_metadata
+
+write.table(Viv_20_metadata,
+            "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Vivianne_2020_qiime_metadata.txt",
+            row.names = F, sep = "\t", quote = F)
+```
+# make manifest
+```{r}
+Vivianne_2020_sampleid = Viv_20_metadata %>% 
+  select(sampleid)
+Vivianne_2020_sampleid
+
+Vivianne_2020_manifest = Vivianne_2020_sampleid %>% 
+  mutate('forward-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Raw_16s_fastq_plaque/", sampleid, "_R1.fastq.gz") ) %>% 
+  mutate('reverse-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Raw_16s_fastq_plaque/", sampleid, "_R2.fastq.gz") )
+Vivianne_2020_manifest
+
+write.table(Vivianne_2020_manifest,
+            "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Vivianne_2020_qiime_manifest.txt",
+            row.names = F, sep = "\t", quote = F)
+```
+# Import to qiime and see the reads quality befor trimming
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+time qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path ./Vivianne_2020_qiime_manifest.txt \
+  --output-path ./Vivianne_2020_demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+time qiime demux summarize \
+  --i-data ./Vivianne_2020_demux.qza \
+  --o-visualization ./Vivianne_2020_demux.qzv
+  
+```
+
+# dada2
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+i=210
+j=210
+echo $i
+echo $j
+  time qiime dada2 denoise-paired \
+    --i-demultiplexed-seqs ./Vivianne_2020_demux.qza \
+    --p-trunc-len-f $i \
+    --p-trunc-len-r $j \
+    --p-trim-left-f 15 \
+    --p-trim-left-r 15 \
+    --p-n-threads 6 \
+    --o-representative-sequences ./Vivianne_2020_"$i"_"$j"_bp_rep-seqs.qza \
+    --o-table ./Vivianne_2020_"$i"_"$j"_bp_table.qza \
+    --o-denoising-stats ./Vivianne_2020_"$i"_"$j"_bp_stats-dada2.qza
+  time qiime metadata tabulate \
+    --m-input-file ./Vivianne_2020_"$i"_"$j"_bp_stats-dada2.qza \
+    --o-visualization ./Vivianne_2020_"$i"_"$j"_bp_stats-dada2.qzv
+
+```
+
+```{bash eval = FALSE}
+
+# extract reads from the full fasta file
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+time qiime feature-classifier extract-reads \
+  --i-sequences /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.fasta.qza \
+  --p-f-primer GTGCCAGCMGCCGCGGTAA \
+  --p-r-primer GGACTACHVGGGTWTCTAAT \
+  --p-trunc-len 320 \
+  --o-reads ./F515_R806_HOMD_V15.22_extract_ref_seqs.qza \
+  --p-n-jobs 6
+
+# fit classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+time qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ./F515_R806_HOMD_V15.22_extract_ref_seqs.qza \
+  --i-reference-taxonomy /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.qiime_g_s_combined.taxonomy.qza \
+  --o-classifier ./F515_R806_HOMD_V15.22_classifier.qza
+
+# feature classifier
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+echo $i
+echo $j
+time qiime feature-classifier classify-sklearn \
+--i-classifier ./F515_R806_HOMD_V15.22_classifier.qza \
+--i-reads ./Vivianne_2020_"$i"_"$j"_bp_rep-seqs.qza \
+--o-classification ./Vivianne_2020_HOMD_15_22_taxonomy.qza \
+--p-n-jobs 4
+
+# features in qzv
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+echo $i
+echo $j
+qiime taxa barplot \
+  --i-table ./Vivianne_2020_"$i"_"$j"_bp_table.qza  \
+  --i-taxonomy ./Vivianne_2020_HOMD_15_22_taxonomy.qza \
+  --m-metadata-file ./Vivianne_2020_qiime_metadata.txt \
+  --o-visualization ./Vivianne_2020_taxa_bar_plots.qzv
+
+# dir for features
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque
+mkdir ./Vivianne_2020_extracted-feature-table
+
+# feature extraction
+qiime tools extract \
+  --input-path ./Vivianne_2020_taxa_bar_plots.qzv \
+  --output-path ./Vivianne_2020_extracted-feature-table
+
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Vivianne_2020_plaque/Vivianne_2020_extracted-feature-table/b431f0d8-fc3c-4f21-9f41-bc2d94bca04c/data/level-7.csv \
+./Vivianne_2020_level-7.csv
+```
+
+

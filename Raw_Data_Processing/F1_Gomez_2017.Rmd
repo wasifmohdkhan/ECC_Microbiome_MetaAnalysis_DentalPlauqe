@@ -1,0 +1,218 @@
+---
+title: "Gomez_2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+# Libraries
+```{r}
+rm(list = ls())
+library(dplyr)
+library(stringr)
+library(tidyr)
+```
+```{r}
+#first download the metadata table from https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA383868&o=acc_s%3Aa
+#import the file
+Gomez_2017_bioproject = read.csv("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/PRJNA383868_SraRunTable.txt")
+Gomez_2017_bioproject
+# this bioproject contains amplicon WGS and RNA-seq data so filter only amplicon data (Assay.Type)
+Gomez_2017_bioproject_16s = Gomez_2017_bioproject %>% 
+  filter(Assay.Type == "AMPLICON")
+Gomez_2017_bioproject_16s
+
+# select useful columns only
+Gomez_2017_bioproject_16s = Gomez_2017_bioproject_16s %>% 
+  select(Run, geo_loc_name, Host_Age, Host_disease, host_sex, host_tissue_sampled)
+Gomez_2017_bioproject_16s
+
+# select host age less than 72 to select only ECC samples
+Gomez_2017_bioproject_16s_ecc = Gomez_2017_bioproject_16s %>% 
+  mutate(Host_Age = str_replace(Host_Age, " months", "")) %>% 
+  mutate(Host_Age = as.double(Host_Age)) %>% 
+  filter(Host_Age <= 72 )
+Gomez_2017_bioproject_16s_ecc
+
+# clean the table
+Gomez_2017_bioproject_16s_ecc = Gomez_2017_bioproject_16s_ecc %>% 
+  rename(sampleid = Run) %>%
+  rename(Disease_status = Host_disease) %>% 
+  rename(Host_age = Host_Age) %>% 
+  rename(Host_sex = host_sex) %>% 
+  rename(Sample_type = host_tissue_sampled) %>% 
+  rename(Geo_location = geo_loc_name)
+Gomez_2017_bioproject_16s_ecc
+
+Gomez_2017_bioproject_16s_ecc = Gomez_2017_bioproject_16s_ecc %>% 
+  mutate(Geo_location = str_extract(Geo_location, "(?<=Australia: ).+(?=\\\\)")) %>% 
+  mutate(Geo_location = str_c(Geo_location, "_AUS"))  %>%
+  mutate(Disease_status = str_replace(Disease_status, "dental caries free", "CF")) %>%
+  mutate(Disease_status = str_replace(Disease_status, "dental caries", "ECC")) %>% 
+  mutate(Host_sex = str_to_sentence(Host_sex)) %>% 
+  mutate(Sample_type = str_remove(Sample_type, "dental ")) %>% 
+  mutate(Sample_type = str_to_sentence(Sample_type)) %>% 
+  mutate(Study_name = "Gomez_2017") %>%
+  relocate(sampleid, Disease_status, Host_age, Host_sex, Sample_type, Geo_location, Study_name)
+Gomez_2017_bioproject_16s_ecc
+
+write.table(Gomez_2017_bioproject_16s_ecc,
+            "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_qiime_metadata.txt",
+            row.names = F, sep = "\t", quote = F)
+```
+
+
+# download files from NCBI using fasterq-dump
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_raw_fastq
+# rm -r *.fastq
+sed '1d' /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_qiime_metadata.txt | while read sampleid EverythingElseInTheLine;
+do
+if [ ! -f $sampleid'_2.fastq' ]; then
+echo "downloading Gomez_2017 sample $sampleid" 
+/home/wasif/Downloads/sratoolkit.2.9.6-ubuntu64/bin/fasterq-dump $sampleid --split-files;
+fi
+done
+
+```
+
+# Manifest file
+```{r}
+Gomez_2017_sampleid = Gomez_2017_bioproject_16s_ecc %>% select(sampleid)
+Gomez_2017_sampleid
+Gomez_2017_manifest = Gomez_2017_sampleid %>% 
+  mutate('forward-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_raw_fastq/", sampleid, "_1.fastq") ) %>% 
+  mutate('reverse-absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_raw_fastq/", sampleid, "_2.fastq") )
+Gomez_2017_manifest
+write.table(Gomez_2017_manifest,
+           "/home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_qiime_manifest.txt",
+           sep = "\t", row.names = F, quote = F)
+```
+
+# Import to qiime and see the reads quality befor trimming
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+time qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path ./Gomez_2017_qiime_manifest.txt \
+  --output-path ./Gomez_2017_demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+time qiime demux summarize \
+  --i-data ./Gomez_2017_demux.qza \
+  --o-visualization ./Gomez_2017_demux.qzv
+  
+```
+
+
+```{bash eval = FALSE}
+cd /home/cpu8/Desktop/Wasif/Gomez_2017
+for ((i=180;i<=230;i+=10))
+do
+for ((j=140;j<=200;j+=10))
+do
+echo "foward trim at $i"
+echo "reverese trim at $j"
+  time qiime dada2 denoise-paired \
+    --i-demultiplexed-seqs ./Gomez_2017_demux.qza \
+    --p-trunc-len-f $i \
+    --p-trunc-len-r $j \
+    --p-trim-left-f 15 \
+    --p-trim-left-r 15 \
+    --p-n-threads 50 \
+    --o-representative-sequences ./Gomez_2017_"$i"_"$j"_bp_rep-seqs.qza \
+    --o-table ./Gomez_2017_"$i"_"$j"_bp_table.qza \
+    --o-denoising-stats ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qza
+  time qiime metadata tabulate \
+    --m-input-file ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qza \
+    --o-visualization ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qzv
+  rm -r *_rep-seqs.qza
+  rm -r *_table.qza
+  rm -r *_stats-dada2.qza
+done
+done
+
+```
+
+#dada final
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+i=200
+j=150
+echo "foward trim at $i"
+echo "reverese trim at $j"
+  time qiime dada2 denoise-paired \
+    --i-demultiplexed-seqs ./Gomez_2017_demux.qza \
+    --p-trunc-len-f $i \
+    --p-trunc-len-r $j \
+    --p-trim-left-f 15 \
+    --p-trim-left-r 15 \
+    --p-n-threads 5 \
+    --o-representative-sequences ./Gomez_2017_"$i"_"$j"_bp_rep-seqs.qza \
+    --o-table ./Gomez_2017_"$i"_"$j"_bp_table.qza \
+    --o-denoising-stats ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qza
+  time qiime metadata tabulate \
+    --m-input-file ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qza \
+    --o-visualization ./Gomez_2017_"$i"_"$j"_bp_stats-dada2.qzv
+
+```
+
+
+```{bash eval = FALSE}
+# extract reads from the full fasta file
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+time qiime feature-classifier extract-reads \
+  --i-sequences /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.fasta.qza \
+  --p-f-primer GTGCCAGCMGCCGCGGTAA \
+  --p-r-primer GGACTACHVGGGTWTCTAAT \
+  --p-trunc-len 320 \
+  --o-reads ./F515_R806_HOMD_V15.22_extract_ref_seqs.qza \
+  --p-n-jobs 6
+
+
+# fit classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+time qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ./F515_R806_HOMD_V15.22_extract_ref_seqs.qza \
+  --i-reference-taxonomy /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.qiime_g_s_combined.taxonomy.qza \
+  --o-classifier ./F515_R806_HOMD_V15.22_classifier.qza
+
+
+# feature classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+echo $i
+echo $j
+time qiime feature-classifier classify-sklearn \
+--i-classifier ./F515_R806_HOMD_V15.22_classifier.qza \
+--i-reads ./Gomez_2017_"$i"_"$j"_bp_rep-seqs.qza \
+--o-classification ./Gomez_2017_HOMD_15_22_taxonomy.qza \
+--p-n-jobs 4
+
+
+# features in qzv
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+echo $i
+echo $j
+qiime taxa barplot \
+  --i-table ./Gomez_2017_"$i"_"$j"_bp_table.qza  \
+  --i-taxonomy ./Gomez_2017_HOMD_15_22_taxonomy.qza \
+  --m-metadata-file ./Gomez_2017_qiime_metadata.txt \
+  --o-visualization ./Gomez_2017_taxa_bar_plots.qzv
+
+
+# dir for features
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017
+mkdir ./Gomez_2017_extracted-feature-table
+
+
+# feature extraction
+qiime tools extract \
+  --input-path ./Gomez_2017_taxa_bar_plots.qzv \
+  --output-path ./Gomez_2017_extracted-feature-table
+  
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Gomez_2017/Gomez_2017_extracted-feature-table/ed896860-02bc-48ef-9a68-54f0695d5071/data/level-7.csv \
+./Gomez_2017_level-7.csv
+```
+

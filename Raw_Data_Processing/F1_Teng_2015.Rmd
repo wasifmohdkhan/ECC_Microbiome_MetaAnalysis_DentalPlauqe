@@ -1,0 +1,418 @@
+---
+title: "Teng_2015 main processing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+```
+
+# Library
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl)
+```
+# try with combining the two fastq files
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/
+cat \
+./SRP040947.fastq \
+./SRR1537490.fastq > \
+./SRP040947_SRR1537490.fastq
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/
+grep "^@SR" ./SRP040947_SRR1537490.fastq  > ./SRP040947_SRR1537490.fastq_header.txt
+cut -d" " -f2 ./SRP040947_SRR1537490.fastq_header.txt > ./SRP040947_SRR1537490.fastq_header_2.txt
+cut -c1-9 ./SRP040947_SRR1537490.fastq_header_2.txt | sort | uniq > ./SRP040947_SRR1537490.fastq_header_3.txt
+
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/
+demuxbyname.sh in=./SRP040947_SRR1537490.fastq out=%.SRP040947_SRR1537490.fastq  names=./SRP040947_SRR1537490.fastq_header_3.txt substring=t
+
+# IDDTTU301_IDDTTU302 are always together so combine these two files
+cat IDDTTU301.SRP040947_SRR1537490.fastq IDDTTU302.SRP040947_SRR1537490.fastq > \
+IDDTTU301_IDDTTU302.SRP040947_SRR1537490.fastq
+
+```
+
+
+
+# import barcode table for plaque samples
+```{r}
+Teng_2015_barcode_all = read_excel("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Barcodes_2015CHM.xlsx")
+Teng_2015_barcode_all
+
+Teng_2015_barcode_all_plaque = Teng_2015_barcode_all %>%
+  filter(Niche == "P")
+
+Teng_2015_barcode_all_plaque
+
+Teng_2015_barcode_all_plaque_2 = Teng_2015_barcode_all_plaque %>% 
+  select(sampleid, BarcodeSequence, Header_identifier)
+Teng_2015_barcode_all_plaque_2
+
+```
+# Identify unique OriginalDataSource for demultiplexing by header names
+```{r}
+Teng_2015_unique_header = Teng_2015_barcode_all_plaque %>% 
+  select(OriginalDataSource)
+Teng_2015_unique_header_2 = Teng_2015_unique_header %>% 
+  distinct(OriginalDataSource)
+Teng_2015_unique_header_2
+# separate IDDTTU301 and IDDTTU302
+ # https://stackoverflow.com/questions/30283873/split-one-row-into-multiple-rows
+Teng_2015_unique_header_3 = data.frame(OriginalDataSource = unlist(strsplit(as.character(Teng_2015_unique_header_2$OriginalDataSource), "_")))
+Teng_2015_unique_header_3
+Teng_2015_unique_header_4 = Teng_2015_unique_header_3 %>% 
+  mutate(OriginalDataSource = str_remove(OriginalDataSource, ".sff")) %>% 
+  arrange(OriginalDataSource)
+Teng_2015_unique_header_4
+```
+
+# Prepare 10 different barcode files for 10 different header to demultiplex all the files
+```{r}
+Teng_2015_header_distinct = Teng_2015_barcode_all_plaque_2 %>% 
+  select(Header_identifier) %>% distinct()
+Teng_2015_header_distinct
+write.table(Teng_2015_header_distinct,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_distinct_header_identifier.txt",
+sep = "\t", row.names = F, quote = F, col.names = F)
+
+
+# write a apply function
+make_barcode_file = function(header_identifier) {
+  print(header_identifier)
+  Teng_2015_barcode = Teng_2015_barcode_all_plaque_2 %>% 
+  filter(Header_identifier == header_identifier) %>% 
+  select(sampleid, BarcodeSequence)
+  #Teng_2015_barcode_HPY8P6R01
+
+  write.table(Teng_2015_barcode,
+  paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/", header_identifier, "_barcodes.txt"),
+  sep = " ", row.names = F, quote = F, col.names = F)
+}
+lapply(Teng_2015_header_distinct$Header_identifier, make_barcode_file)
+```
+
+# write all plaque files with barcode, no header, to remove barcodes later from fastq
+```{r}
+Teng_2015_barcode_all_plaque_3 = Teng_2015_barcode_all_plaque_2 %>% 
+  select(sampleid, BarcodeSequence)
+write.table(Teng_2015_barcode_all_plaque_3,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_distinct_sample_barcode_only.txt",
+ sep = " ", row.names = F, quote = F, col.names = F)
+```
+
+
+# demultiplex fastq files using barcode files
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/
+while read -r line; 
+  do
+  cat "$line".SRP040947_SRR1537490.fastq | fastx_barcode_splitter.pl --bcfile "$line"_barcodes.txt --bol --suffix .fastq --prefix ./Teng_2015_demux_samples/
+  done < /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_distinct_header_identifier.txt
+rm -r /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_demux_samples/unmatched.fastq
+# count the files the new generate files should be 142 in number
+```
+
+#Remove adapter (barcodes) from all the files
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/
+while read -r col1 col2; 
+  do
+  echo $col1 $col2
+  ncol2=${#col2}
+  ncol2_plus_one=$(($ncol2 +1))
+  echo "adapter_length = "$ncol2_plus_one
+  fastx_trimmer -f $ncol2_plus_one -i ./Teng_2015_demux_samples/"$col1".fastq -o ./Teng_2015_demux_samples/temp"$col1".fastq
+  # to rename again
+  mv ./Teng_2015_demux_samples/"$col1".fastq ./Teng_2015_demux_samples/temp/deleteaftercheck"$col1".fastq
+  fastx_trimmer  -i ./Teng_2015_demux_samples/temp"$col1".fastq -o ./Teng_2015_demux_samples/"$col1".fastq
+  rm -r ./Teng_2015_demux_samples/temp"$col1".fastq
+  done < /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_distinct_sample_barcode_only.txt
+#check and compare the files with temp folder and then delete the temp folder
+rm -r ./Teng_2015_demux_samples/temp/
+
+
+```
+ 
+# Import the table given in paper to identify SECC
+```{r}
+Teng_2015_t1 = read_excel("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_table1.xlsx")
+Teng_2015_t1
+
+Teng_2015_t1_gather = Teng_2015_t1 %>% gather(timepoint, dmfs, P1:P4)
+Teng_2015_t1_gather
+
+# separate number and letter from dmfs column
+Teng_2015_t1_gather_1 = Teng_2015_t1_gather  %>%
+ mutate(dmfs_1 = str_extract(dmfs, "[:digit:]+")) %>% 
+mutate(dmfs_2 = str_extract(dmfs, "[:alpha:]+"))
+Teng_2015_t1_gather_1
+
+# interesting dmfs_2 are c and a
+dmfs_2_interst = c("c", "a")
+
+#filter c and a dmfs2
+Teng_2015_t1_gather_2 = Teng_2015_t1_gather_1 %>% 
+  filter(dmfs_2 %in% dmfs_2_interst)
+Teng_2015_t1_gather_2
+
+Teng_2015_t1_gather_3 = Teng_2015_t1_gather_2 %>% 
+  filter(dmfs_1 == 0 | dmfs_1 > 5) # filter dmfs 0, caries free or dmfs >6 secc, remove non secc samples
+Teng_2015_t1_gather_3
+
+# merge columns sample and timepoints # now we have those sample ids which we are interested in
+Teng_2015_t1_gather_4 = Teng_2015_t1_gather_3 %>% 
+  mutate(sampleid = paste0(sample, timepoint))
+Teng_2015_t1_gather_4
+```
+
+# Make metadata table for the selected samples
+```{r}
+Teng_2015_plaque_metadata = Teng_2015_t1_gather_4 %>% 
+  select(sampleid, status, Age)
+Teng_2015_plaque_metadata
+
+Teng_2015_plaque_metadata_2 = Teng_2015_plaque_metadata %>% 
+  rename(Disease_status = status) %>% 
+  rename(Host_age = Age)
+Teng_2015_plaque_metadata_2
+
+Teng_2015_plaque_metadata_3 = Teng_2015_plaque_metadata_2 %>% 
+  mutate(Disease_status = str_replace(Disease_status, "H2H", "CF")) %>% 
+  mutate(Disease_status = str_replace(Disease_status, "H2C", "SECC")) %>% #we selected only those h2c which have high dmfs caries
+  mutate(Disease_status = str_replace(Disease_status, "C2C", "SECC"))
+  
+Teng_2015_plaque_metadata_3 = Teng_2015_plaque_metadata_3 %>% 
+  mutate(Host_sex = "Unknown")%>% 
+  mutate(Sample_type = "Plaque") %>% 
+  mutate(Geo_location = "Guangzhou_CHN")%>% 
+  mutate(Study_name = "Teng_2015")
+Teng_2015_plaque_metadata_3
+
+write.table(Teng_2015_plaque_metadata_3,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_plaque_qiime_metadata.txt",
+sep = "\t", row.names = F, quote = F)
+```
+# make manifest file
+```{r}
+Teng_2015_plaque_manifest = Teng_2015_plaque_metadata_3 %>% 
+  select(sampleid)
+Teng_2015_plaque_manifest
+
+Teng_2015_plaque_manifest = Teng_2015_plaque_manifest %>% 
+  mutate('absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_demux_samples/", sampleid, ".fastq") )
+Teng_2015_plaque_manifest
+
+write.table(Teng_2015_plaque_manifest,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_plaque_qiime_manifest.txt",
+sep = "\t", row.names = F, quote = F)
+```
+# QIIME protocol
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+
+qiime tools import \
+  --type 'SampleData[SequencesWithQuality]' \
+  --input-path ./Teng_2015_plaque_qiime_manifest.txt \
+  --output-path ./Teng_2015_plaque_demux.qza\
+  --input-format SingleEndFastqManifestPhred33V2
+  
+time qiime demux summarize \
+  --i-data ./Teng_2015_plaque_demux.qza \
+  --o-visualization ./Teng_2015_plaque_demux.qzv
+  
+```
+
+
+```{bash eval = FALSE}
+# The amplicon length should be 526 # http://insilico.ehu.es/PCR/
+#https://benjjneb.github.io/dada2/tutorial.html
+#trimming above 500 gives very poor results
+#trimming in the beginning doesnot affect the result
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+for ((i=0;i<=20;i+=20))
+do
+#i=20
+k=5
+for ((j=480;j<=500;j+=10))
+do
+ 
+echo $i
+echo $j
+
+
+time qiime dada2 denoise-pyro \
+  --i-demultiplexed-seqs ./Teng_2015_plaque_demux.qza \
+  --p-trim-left $i \
+  --p-trunc-len $j \
+  --p-n-threads 5 \
+  --p-max-ee $k \
+  --o-representative-sequences ./Teng_2015_plaque_dada2_try/Teng_2015_plaque_"$i"_"$j"_"$k"_bp_rep-seqs.qza \
+  --o-table ./Teng_2015_plaque_dada2_try/Teng_2015_plaque_"$i"_"$j"_"$k"_bp_table.qza \
+  --o-denoising-stats ./Teng_2015_plaque_dada2_try/Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qza
+  
+time qiime metadata tabulate \
+  --m-input-file ./Teng_2015_plaque_dada2_try/Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qza \
+  --o-visualization ./Teng_2015_plaque_dada2_try/Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qzv
+
+rm -r ./Teng_2015_plaque_dada2_try/*_rep-seqs.qza
+rm -r ./Teng_2015_plaque_dada2_try/*_table.qza
+rm -r ./Teng_2015_plaque_dada2_try/*_stats-dada2.qza
+done
+done
+
+#The best setting found is trimming at 20 and 490 with maxEE 5 and then remove those samples which have less than 2000 reads
+```
+
+```{r}
+# samples to be removed due to the poor number of reads (less than 2000)
+poor_quality_samples = c("K1005P4", "K1018P1", "K1016P1", "K1007P4", "K1014P1")
+Teng_2015_plaque_metadata_3
+Teng_2015_plaque_metadata_4 = Teng_2015_plaque_metadata_3 %>% 
+  filter(!sampleid %in% poor_quality_samples)
+
+Teng_2015_plaque_metadata_4
+
+write.table(Teng_2015_plaque_metadata_4,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_plaque_qiime_metadata_2.txt",
+sep = "\t", row.names = F, quote = F)
+```
+# make manifest file
+```{r}
+Teng_2015_plaque_manifest_2 = Teng_2015_plaque_metadata_4 %>% 
+  select(sampleid)
+Teng_2015_plaque_manifest_2
+
+Teng_2015_plaque_manifest_2 = Teng_2015_plaque_manifest_2 %>% 
+  mutate('absolute-filepath' = paste0("/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_raw_reads/Teng_2015_demux_samples/", sampleid, ".fastq") )
+Teng_2015_plaque_manifest_2
+
+write.table(Teng_2015_plaque_manifest_2,
+"/home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_plaque_qiime_manifest_2.txt",
+sep = "\t", row.names = F, quote = F)
+```
+# QIIME protocol
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+
+qiime tools import \
+  --type 'SampleData[SequencesWithQuality]' \
+  --input-path ./Teng_2015_plaque_qiime_manifest_2.txt \
+  --output-path ./Teng_2015_plaque_demux_2.qza\
+  --input-format SingleEndFastqManifestPhred33V2
+  
+time qiime demux summarize \
+  --i-data ./Teng_2015_plaque_demux_2.qza \
+  --o-visualization ./Teng_2015_plaque_demux_2.qzv
+  
+```
+```{bash eval = FALSE}
+# The amplicon length should be 526 # http://insilico.ehu.es/PCR/
+#https://benjjneb.github.io/dada2/tutorial.html
+#trimming above 500 gives very poor results
+#trimming in the beginning doesnot affect the result
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+
+i=20
+j=490
+k=5
+echo $i
+echo $j
+echo $k
+
+time qiime dada2 denoise-pyro \
+  --i-demultiplexed-seqs ./Teng_2015_plaque_demux_2.qza \
+  --p-trim-left $i \
+  --p-trunc-len $j \
+  --p-n-threads 5 \
+  --p-max-ee $k \
+  --o-representative-sequences ./Teng_2015_plaque_"$i"_"$j"_"$k"_bp_rep-seqs.qza \
+  --o-table ./Teng_2015_plaque_"$i"_"$j"_"$k"_bp_table.qza \
+  --o-denoising-stats ./Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qza
+  
+time qiime metadata tabulate \
+  --m-input-file ./Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qza \
+  --o-visualization ./Teng_2015_plaque_"$i"_"$j"_"$k"_bp_stats-dada2.qzv
+
+```
+
+```{bash eval = FALSE}
+# extract reads from the full fasta file
+#check the primer sequence carefully
+cd /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522_p9/
+wget http://www.homd.org/ftp/16S_rRNA_refseq/HOMD_16S_rRNA_RefSeq/V15.22/HOMD_16S_rRNA_RefSeq_V15.22.p9.fasta
+
+# import fasta seq file
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522_p9/HOMD_16S_rRNA_RefSeq_V15.22.p9.fasta\
+  --output-path /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522_p9/HOMD_16S_rRNA_RefSeq_V15.22.p9.fasta.qza
+
+# Trim first 4 bases from the primer for so that the sequence is from 9th base, see lab notes for details
+# extract reads from the full fasta file
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+time qiime feature-classifier extract-reads \
+  --i-sequences /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522_p9/HOMD_16S_rRNA_RefSeq_V15.22.p9.fasta.qza \
+  --p-f-primer GAGTTTGATCCTGGCTCAG \
+  --p-r-primer TACCGCGGCTGCTGGCAC \
+  --p-trunc-len 550 \
+  --o-reads ./F05_R534_HOMD_V15.22.p9_extract_ref_seqs.qza \
+  --p-n-jobs 6
+
+# fit classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+time qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ./F05_R534_HOMD_V15.22.p9_extract_ref_seqs.qza \
+  --i-reference-taxonomy /home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_16S_rRNA_RefSeq_V15.22.qiime_g_s_combined.taxonomy.qza \
+  --o-classifier ./F05_R534_HOMD_V15.22.p9_classifier.qza
+
+# feature classifier
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+time qiime feature-classifier classify-sklearn \
+--i-classifier ./F05_R534_HOMD_V15.22.p9_classifier.qza \
+--i-reads ./Teng_2015_plaque_20_490_5_bp_rep-seqs.qza \
+--o-classification ./Teng_2015_HOMD_15_22_taxonomy.qza \
+--p-n-jobs 4
+
+# features in qzv
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+qiime taxa barplot \
+  --i-table ./Teng_2015_plaque_20_490_5_bp_table.qza \
+  --i-taxonomy ./Teng_2015_HOMD_15_22_taxonomy.qza \
+  --m-metadata-file ./Teng_2015_plaque_qiime_metadata_2.txt \
+  --o-visualization ./Teng_2015_taxa_bar_plots.qzv
+
+# dir for features
+rm -r ./Teng_2015_extracted-feature-table
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+mkdir ./Teng_2015_extracted-feature-table
+
+# feature extraction
+qiime tools extract \
+  --input-path ./Teng_2015_taxa_bar_plots.qzv \
+  --output-path ./Teng_2015_extracted-feature-table
+
+cp /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque/Teng_2015_extracted-feature-table/ab4e9567-b97c-442a-ba92-120b597daa4b/data/level-7.csv \
+./Teng_2015_level-7.csv
+
+```
+
+# Calculte alpha-rarefaction curve
+```{bash eval = FALSE}
+cd /home/storage2/wasif/Plaque_metagenome_meta_analysis/Teng_2015_plaque
+qiime diversity alpha-rarefaction \
+  --i-table ./Teng_2015_plaque_20_490_5_bp_table.qza \
+  --p-max-depth 10000 \
+  --m-metadata-file ./Teng_2015_plaque_qiime_metadata_2.txt \
+  --o-visualization ./Teng_2015_plaque_20_490_5_bp_alpha_rarefaction.qzv
+```
+
