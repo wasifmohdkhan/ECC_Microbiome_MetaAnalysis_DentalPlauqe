@@ -1,0 +1,275 @@
+---
+title: "Species level bar plot using microeco R package"
+output: html_document
+date: '2022-12-14'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+set.seed(23456)
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(microeco)
+library(DT)
+library(magrittr)
+library(ggpubr)
+#library(metamicrobiomeR)
+#library(phyloseq)
+# library(vegan)
+# library(DT)
+# library(mixOmics)
+# library(PLSDAbatch)
+# library(tidyr)
+# library(broom)
+```
+
+
+```{r}
+getwd()
+```
+
+```{r}
+in_dir  = "../../Plaque_Species/Species_221101_2_processed_data_files"
+#out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))  
+
+Pooled_Pl_Species_meta
+
+# OTU
+Pooled_Pl_Species_RA = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+  # mutate_all(., function(x) {x*10^7}) %>%
+  # #mutate_all(., function(x) {x+1}) %>%
+  # mutate_all(., function(x) {as.integer(x)})
+Pooled_Pl_Species_RA
+
+Pooled_Pl_Species_RA_t =  Pooled_Pl_Species_RA %>%
+  t() %>%
+  as.data.frame()
+Pooled_Pl_Species_RA_t
+```
+
+```{r}
+table(Pooled_Pl_Species_meta$Study_name, Pooled_Pl_Species_meta$Disease_status)
+table(Pooled_Pl_Species_meta$Disease_status)
+```
+# Make a dummy tax_table
+```{r}
+taxmat = matrix(sample(letters, 70, replace = TRUE), nrow = nrow((Pooled_Pl_Species_RA_t)), ncol = 6)
+rownames(taxmat) <- rownames((Pooled_Pl_Species_RA_t))
+colnames(taxmat) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Species")
+taxmat %>% datatable()
+
+taxmat  %<>%  as.data.frame %>% 
+  rownames_to_column("OTUs") %>% 
+  mutate(Species = OTUs) %>% 
+  column_to_rownames("OTUs") %>% 
+  #as.matrix() %>% 
+  as.data.frame()
+taxmat
+
+taxmat %<>% tidy_taxonomy
+taxmat
+```
+
+
+# create a microtable object
+
+```{r}
+Pooled_Pl_Species_microeco_obj = microtable$new(sample_table = Pooled_Pl_Species_meta,
+                                               otu_table = Pooled_Pl_Species_RA_t,
+                                               tax_table = taxmat
+                                               )
+Pooled_Pl_Species_microeco_obj
+```
+
+```{r}
+# The groupmean parameter can be used to obtain the group-mean barplot.
+t1 <- trans_abund$new(dataset = Pooled_Pl_Species_microeco_obj, taxrank = "Species", ntaxa = 10, use_percentage = FALSE, groupmean = "Disease_status")
+g1 <- t1$plot_bar(others_color = "grey70", legend_text_italic = TRUE)
+Pooled_Pl_Species_barplot = g1 + theme_bw() + theme(axis.title.y = element_text(size = 18))
+Pooled_Pl_Species_barplot
+```
+
+
+# separate this barplot for CF and ECC samples
+# create two subsets data one for CF and other for ECC
+```{r}
+Pooled_Pl_Species_CF <- clone(Pooled_Pl_Species_microeco_obj)
+Pooled_Pl_Species_CF$sample_table <- subset(Pooled_Pl_Species_CF$sample_table, Disease_status == "CF")
+# this is necessary to make files in group1 corresponding
+Pooled_Pl_Species_CF$tidy_dataset()
+Pooled_Pl_Species_CF
+```
+```{r}
+# The groupmean parameter can be used to obtain the group-mean barplot.
+Pooled_Pl_Species_CF_trans_abund <- trans_abund$new(dataset = Pooled_Pl_Species_CF, taxrank = "Species", ntaxa = 10, use_percentage = FALSE, groupmean = "Study_name")
+Pooled_Pl_Species_CF_barplot <- Pooled_Pl_Species_CF_trans_abund$plot_bar(others_color = "grey70", legend_text_italic = FALSE)
+Pooled_Pl_Species_CF_barplot = Pooled_Pl_Species_CF_barplot + theme_bw() + 
+  theme(axis.title.y = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        plot.title = element_text(hjust = 0.5, face="bold") ) +
+  ggtitle("CF Samples")
+Pooled_Pl_Species_CF_barplot
+```
+
+```{r}
+Pooled_Pl_Species_ECC <- clone(Pooled_Pl_Species_microeco_obj)
+Pooled_Pl_Species_ECC$sample_table <- subset(Pooled_Pl_Species_ECC$sample_table, Disease_status == "ECC")
+# this is necessary to make files in group1 corresponding
+Pooled_Pl_Species_ECC$tidy_dataset()
+Pooled_Pl_Species_ECC
+```
+
+```{r}
+# The groupmean parameter can be used to obtain the group-mean barplot.
+Pooled_Pl_Species_ECC_trans_abund <- trans_abund$new(dataset = Pooled_Pl_Species_ECC, taxrank = "Species", ntaxa = 10, use_percentage = FALSE, groupmean = "Study_name")
+Pooled_Pl_Species_ECC_barplot <- Pooled_Pl_Species_ECC_trans_abund$plot_bar(others_color = "grey70", legend_text_italic = FALSE)
+Pooled_Pl_Species_ECC_barplot = Pooled_Pl_Species_ECC_barplot + theme_bw() + 
+  theme(axis.title.y = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        plot.title = element_text(hjust = 0.5, face="bold")) +
+  ggtitle("ECC Samples")
+Pooled_Pl_Species_ECC_barplot
+```
+
+```{r}
+ggarrange(Pooled_Pl_Species_CF_barplot, Pooled_Pl_Species_ECC_barplot, Pooled_Pl_Species_barplot,
+          align = "h",
+  common.legend = TRUE, legend = "bottom"
+  )
+```
+
+## Now fix the colors for top taxa
+
+## get top taxa from all three barplots
+```{r}
+taxa_union = union(t1[["data_taxanames"]],
+      union(Pooled_Pl_Species_CF_trans_abund[["data_taxanames"]],
+            Pooled_Pl_Species_ECC_trans_abund[["data_taxanames"]])
+      )
+taxa_union = c("Others",taxa_union)
+taxa_union
+```
+
+## Set colors for these taxa
+```{r}
+# color palette taken from  rcartocolor::carto_pal(12, "Safe"), ggthemes::gdocs_pal()(10) and more
+# comment out the colors which may not be required 
+# comment out the colors which are used for species so that different colors will be used for genus_level
+taxa_colors = c("grey70", # common color
+                "#88CCEE", "#CC6677", "#117733", "#332288", "#AA4499", "#44AA99", "#999933" ,"#661100" ,"#3366cc", "#dc3912", "#990099", "#0099c6", # These colors will be used for species
+                "#dd4477","#66aa00", "#b82e2e", "#316395","#CC9966", "#FF9900", "#006633","#FF0099","#6600CC", "#FFCC66", "#33CCFF",
+                               "#0066CC", "#00CC66", "#009966", "#FFCCCC", "#CC0033", "#663300", "#FF9966", "#FF6666", "#33CC33", "#ff3399", "#993399","#FFCC33",
+                               "#FFFFCC", "#0066FF", "#CCFFFF", "#FF9933", "#6600FF", "#99CCFF")
+
+select_colors = length(taxa_union) +1
+taxa_colors = taxa_colors[1:select_colors]
+taxa_colors
+
+taxa_colors = alpha(taxa_colors, 0.9)
+```
+
+
+
+
+
+```{r}
+Pooled_Pl_Species_barplot_2 = Pooled_Pl_Species_barplot + 
+  scale_fill_manual(breaks = taxa_union,
+                    values = taxa_colors,
+                    limits= taxa_union,
+                    ) 
+
+Pooled_Pl_Species_barplot_2
+```
+
+
+```{r}
+legend <- ggpubr::get_legend(Pooled_Pl_Species_barplot_2)
+Pooled_Pl_Species_barplot_2_legend = as_ggplot(legend)
+Pooled_Pl_Species_barplot_2_legend
+```
+
+
+```{r}
+Pooled_Pl_Species_barplot_3 = Pooled_Pl_Species_barplot + 
+  scale_fill_manual(breaks = taxa_union,
+                    values = taxa_colors,
+                    labels = taxa_union) +
+  theme(legend.position="none",
+        axis.title.y = element_text(size=12)
+        )
+Pooled_Pl_Species_barplot_3
+```
+
+
+```{r}
+Pooled_Pl_Species_CF_barplot_2 = Pooled_Pl_Species_CF_barplot + 
+  scale_fill_manual(breaks = taxa_union,
+                    values = taxa_colors,
+                    labels = taxa_union) +
+    theme(legend.position="none") 
+Pooled_Pl_Species_CF_barplot_2
+```
+
+```{r}
+Pooled_Pl_Species_ECC_barplot_2 = Pooled_Pl_Species_ECC_barplot + 
+  scale_fill_manual(breaks = taxa_union,
+                    values = taxa_colors,
+                    labels = taxa_union) +
+    theme(legend.position="none") 
+Pooled_Pl_Species_ECC_barplot_2
+```
+
+
+
+```{r}
+Pooled_Pl_Species_ggarranged =ggpubr::ggarrange(Pooled_Pl_Species_barplot_3, Pooled_Pl_Species_barplot_2_legend,
+                                        Pooled_Pl_Species_CF_barplot_2, Pooled_Pl_Species_ECC_barplot_2,
+                                        ncol = 2, nrow = 2,
+                                        common.legend = F
+                                        ) + 
+                                        bgcolor("white") +
+                                        theme_pubclean()
+
+Pooled_Pl_Species_ggarranged
+
+ggsave("./Pooled_Pl_Species_ggarranged.png",
+       Pooled_Pl_Species_ggarranged,
+       width = 5,
+       height = 7.25)
+```
+
+
+

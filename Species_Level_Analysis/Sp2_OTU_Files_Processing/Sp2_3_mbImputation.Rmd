@@ -1,0 +1,219 @@
+---
+title: "mbImputation on Relative abundance RA_mbImp"
+output: html_document
+date: '2022-09-29'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+rm(list = ls())
+set.seed(23457)
+```
+
+# libraries General
+
+```{r}
+library(tidyverse)
+library(DT)
+library(pROC) #ggroc
+```
+
+# Libraries specific
+
+```{r}
+library(SIAMCAT)
+library(mbImpute)
+library(DECIPHER) #DNA string distance matrix
+# library(PCAtools) # for the command PCAtools::pca
+# library(mixOmics)
+# library(phyloseq)
+library(microbiome) # microbiome::transform
+# library(PLSDAbatch)
+# library(vegan) #varpart
+```
+
+```{r}
+in_dir  = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+Pooled_Pl_Species_meta
+
+# OTU
+Pooled_Pl_Species_RA = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) 
+Pooled_Pl_Species_RA
+
+# Pooled_Pl_Species_RA_t =  Pooled_Pl_Species_RA %>% 
+#   t() %>% 
+#   as.data.frame()
+# Pooled_Pl_Species_RA_t
+```
+
+
+# rename OTU and meta tables
+```{r}
+Pooled_otu = Pooled_Pl_Species_RA             # taxa should be column for mbimpute
+Pooled_otu
+Pooled_meta = Pooled_Pl_Species_meta # rownames should be ids
+Pooled_meta
+```
+
+
+# Import the HOMD_v1522/HOMD_V15.22_species_seqid_sequence file
+```{r}
+homd_Species_seq = read.table("/home/storage2/wasif/Metagenomic_meta_data/HOMD_database/HOMD_v1522/HOMD_V15.22_species_seqid_sequence.txt",
+                              header = T, sep = "\t")
+homd_Species_seq
+```
+
+# Try: Apply css normalization and mbImputation on 1 study before starting a for loop for 5 studies
+```{r}
+data_sets = unique(Pooled_meta$Study_name)
+# "Teng_2015"     "Agnello_2017"  "Vivianne_2020" "Gomez_2017"    "Kalpana_2020"
+mbImp_matrices_list = list()
+#d = data_sets[3]
+
+for (d in data_sets){
+  
+  # filter one study
+  data_set_meta <- Pooled_meta %>% 
+    filter(Study_name==d) %>% 
+    as.data.frame()
+ 
+  # extract OTU table corresponding to 1 study
+  data_set_otu = Pooled_otu %>% 
+    rownames_to_column("sampleid") %>% 
+    filter(sampleid %in% rownames(data_set_meta)) %>% 
+    column_to_rownames("sampleid") %>% 
+    select_if(colSums(.) != 0)
+
+  
+  # Extract column_names to select HOMD sequences for those entries
+  data_set_colnames = colnames(data_set_otu)
+  #data_set_colnames
+  
+  homd_Species_seq_sel = homd_Species_seq %>% 
+  filter(species_name %in% data_set_colnames) # but this one is not reordered yet
+  #homd_Species_seq_sel
+  
+  #df[match(target, df$name),] # to match the enteries
+  homd_Species_seq_sel = homd_Species_seq_sel[match(data_set_colnames, homd_Species_seq_sel$species_name),]
+  #homd_Species_seq_sel
+  
+  homd_Species_seq_sel_dna <- DNAStringSet(homd_Species_seq_sel$sequence)
+  #homd_Species_seq_sel_dna
+  
+  homd_Species_seq_sel_dna_aligned = AlignSeqs(homd_Species_seq_sel_dna, processors = 1) # changing processors can cause a problem
+  #homd_Species_seq_sel_dna_aligned
+  
+  homd_Species_seq_sel_dna_distmat = DistanceMatrix(homd_Species_seq_sel_dna_aligned,
+                                                    correction = "Jukes-Cantor",
+                                                    processors = 6)
+  homd_Species_seq_sel_dna_distmat %>% datatable()
+  
+  # merge meta otu to bring the samples in same order
+  
+  data_set_meta_otu = merge(x = data_set_meta, y = data_set_otu, by = "row.names", all = TRUE)
+  data_set_meta_otu %>% datatable()
+  data_set_meta_otu = data_set_meta_otu %>% 
+    column_to_rownames("Row.names") %>% 
+    dplyr::select(-c(Host_age, Host_sex, Sample_type, Geo_location, Study_name)) 
+  data_set_meta_otu %>% datatable()
+  data_set_All_Species_otu_conition = data_set_meta_otu[,1]
+  data_set_All_Species_otu_conition 
+  data_set_All_Species_otu_tab = data_set_meta_otu[ ,2:ncol(data_set_meta_otu)]
+  data_set_All_Species_otu_tab = data_set_All_Species_otu_tab %>% 
+    as.matrix()
+  data_set_All_Species_otu_tab %>% datatable()
+  
+  data_set_All_Species_otu_mbImp <- mbImpute( condition = data_set_All_Species_otu_conition,
+                                              otu_tab = data_set_All_Species_otu_tab,
+                                              D = homd_Species_seq_sel_dna_distmat,
+                                              parallel = T, ncores = 8,
+                                              k = 5)
+data_set_All_Species_otu_mbImp_mat = data_set_All_Species_otu_mbImp$imp_count_mat_norm %>% as.data.frame()
+
+data_set_All_Species_otu_mbImp_mat %>% datatable()
+
+mbImp_matrices_list[[d]] =  data_set_All_Species_otu_mbImp_mat
+}
+```
+
+```{r}
+Pooled_Pl_Species_ind_mbImp_mat = data.frame("OTUs" = as.character())
+
+#d = data_sets[3]
+for (d in data_sets){
+  print(mbImp_matrices_list[[d]])
+  mbImp_matrix = mbImp_matrices_list[[d]] %>%
+    as.matrix() %>% 
+    prop.table(., 1) %>% 
+    t() %>% 
+    as.data.frame() %>% 
+    rownames_to_column("OTUs")
+  
+    Pooled_Pl_Species_ind_mbImp_mat = full_join(Pooled_Pl_Species_ind_mbImp_mat,
+                                              mbImp_matrix,
+                                              by = c("OTUs" = "OTUs"))
+        # Pooled_Pl_Species_ind_mbImp_mat = full_join(mbImp_matrix,
+        #                                       Pooled_Pl_Species_ind_mbImp_mat,
+        #                                       by = c("OTUs" = "OTUs"))
+}
+Pooled_Pl_Species_ind_mbImp_mat
+# replace NAs
+Pooled_Pl_Species_ind_mbImp_mat[is.na(Pooled_Pl_Species_ind_mbImp_mat)] = 0
+Pooled_Pl_Species_ind_mbImp_mat
+
+Pooled_Pl_Species_ind_mbImp_mat  %<>% column_to_rownames("OTUs") %>% 
+  t() %>% 
+  as.data.frame()
+Pooled_Pl_Species_ind_mbImp_mat
+```
+
+ # check if the row names in metadata and OTU files are the same
+
+```{r}
+identical(row.names(Pooled_Pl_Species_meta), row.names(Pooled_Pl_Species_ind_mbImp_mat))
+```
+
+# Save the imputed data
+```{r}
+save(Pooled_Pl_Species_ind_mbImp_mat, file = paste0(out_dir, "/Pooled_Pl_Species_ind_mbImp_mat.RData"))
+```
+
+# just to check if the proportion table is correct
+yes it is
+```{r}
+agnello_p1 = mbImp_matrices_list$Agnello_2017 %>% filter(rownames(.) == "p1") %>% t() %>% as.data.frame()
+agnello_p1
+
+agnello_p1 = agnello_p1 %>%
+  mutate(p1_prop = p1/sum(p1))
+agnello_p1
+```
+

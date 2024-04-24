@@ -1,0 +1,125 @@
+---
+title: "RA_mbImp_CLR"
+output: html_document
+date: '2022-09-14'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+set.seed(23456)
+```
+
+# To print the start time
+
+# libraries General
+
+```{r}
+library(tidyverse)
+library(DT)
+library(pROC) #ggroc
+```
+
+# Libraries specific
+
+```{r}
+library(SIAMCAT)
+library(mbImpute)
+library(DECIPHER) #DNA string distance matrix
+# library(PCAtools) # for the command PCAtools::pca
+# library(mixOmics)
+# library(phyloseq)
+library(microbiome) # microbiome::transform
+# library(PLSDAbatch)
+# library(vegan) #varpart
+```
+
+```{r}
+in_dir  = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# Load RA_mbImp table
+```{r}
+load(paste0(out_dir, "/Pooled_Pl_Species_ind_mbImp_mat.RData"))
+Pooled_Pl_Species_ind_mbImp_mat
+
+# transpose because This is taxa as column while siamcat requires taxa as row
+Pooled_Pl_Species_ind_mbImp_mat_2 = Pooled_Pl_Species_ind_mbImp_mat %>% 
+  t() %>% 
+  as.data.frame()
+Pooled_Pl_Species_ind_mbImp_mat_2
+```
+
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+Pooled_Pl_Species_meta
+
+# # OTU
+# Pooled_Pl_Species_RA_t = Pooled_Pl_Species_RA_table %>% 
+#   column_to_rownames("sampleid") %>% 
+#   dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) %>% 
+#   t() %>% 
+#   as.data.frame()
+# Pooled_Pl_Species_RA_t
+```
+
+# Now microbiome::transform on relative abundance values
+
+```{r}
+OTU_RA = otu_table(Pooled_Pl_Species_ind_mbImp_mat_2, taxa_are_rows = T)
+meta_table = sample_data(Pooled_Pl_Species_meta )
+Pooled_Pl_Species_RA_mbImp_phyloseq = phyloseq(OTU_RA, meta_table)
+Pooled_Pl_Species_RA_mbImp_phyloseq
+
+# clr using microbiome::transform
+Pooled_Pl_Species_RA_mbImp_phyloseq_clr = microbiome::transform(Pooled_Pl_Species_RA_mbImp_phyloseq,
+                                                              transform = 'clr',
+                                                          target = "sample")
+
+# Extract abundance matrix from the phyloseq object
+Pooled_Pl_Species_RA_mbImp_clr = otu_table(Pooled_Pl_Species_RA_mbImp_phyloseq_clr) %>%
+  as.data.frame()
+Pooled_Pl_Species_RA_mbImp_clr
+
+```
+
+
+# Save the imputed data
+```{r}
+save(Pooled_Pl_Species_RA_mbImp_clr, file = paste0(out_dir, "/Pooled_Pl_Species_RA_mbImp_clr.RData"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

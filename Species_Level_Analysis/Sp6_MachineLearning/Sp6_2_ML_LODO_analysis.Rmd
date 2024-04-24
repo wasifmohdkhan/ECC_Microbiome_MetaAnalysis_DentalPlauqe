@@ -1,0 +1,959 @@
+---
+title: "Siamcat on RA_CLR_sPLSDA trial with nest foreach looping"
+output: html_document
+date: '2022-09-14'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+### <https://ethen8181.github.io/Business-Analytics/R/efficient_looping/efficient_looping.html#>:\~:text=Nested%20Foreach,all%20be%20executed%20in%20parallel.
+
+```{r}
+rm(list = ls())
+set.seed(23456)
+```
+
+# To print the start time
+
+```{r}
+start_time = Sys.time()
+start_time
+```
+
+# ggplot titles and other parameters
+
+```{r}
+ml_method = "randomForest"
+param_set = NULL
+# ml_method = "enet"
+# param_set = list('alpha'=0) # 0 is for ridge and 1 is for lasso
+
+
+top_feat_num_c = c(10, 15, 20, 30, 50, 75, 100) #, 100, 120) # feat_num = 5 may not work as siamcat require more than 10 OTUs
+num_resample = 5
+
+
+ggplot_title = paste0("Pooled_Pl_Species_RA_CLR_sPLSDA", "_", ml_method) 
+```
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(DT)
+library(stringr)
+library(pROC) #ggroc
+library(ranger)
+library(SIAMCAT)
+library(magrittr)
+
+# library(PCAtools) # for the command PCAtools::pca
+# library(mixOmics)
+# library(phyloseq)
+# library(microbiome)
+# library(PLSDAbatch)
+# library(vegan) #varpart
+```
+
+# To print the start time
+
+```{r}
+start_time = Sys.time()
+start_time
+```
+
+# program for to convert a simacat object with specific number of features. This is required because the thres.fs option in siamcat selects differnt featurs at each CV. Hence it returns more number of features at the end then thres.fs.
+
+This could fail with lasso as lasso sometimes selects 0 variables in 'r.med \< max_fs' option. or you can chnage the alpha value in enet
+
+```{r}
+source("../../R_functions_wk/max_fs_trained_sc_obj_wk.R", local = TRUE)
+```
+
+# Import data
+
+```{r}
+in_dir  = "../../Plaque_Species/Species_221101_2_processed_data_files"
+#out_dir = "/home/wasif/Rproj_221101_Plaque_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# Load the RA_clr_splsda file
+
+```{r}
+load(paste0(in_dir, "/Pooled_Pl_Species_RA_clr_splsda.RData"))
+Pooled_Pl_Species_RA_clr_splsda
+
+# transpose because This is taxa as column while siamcat requires taxa as row
+Pooled_Pl_Species_RA_clr_splsda_2 = Pooled_Pl_Species_RA_clr_splsda %>% 
+  t() %>% 
+  as.data.frame()
+Pooled_Pl_Species_RA_clr_splsda_2
+
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+Pooled_Pl_Species_meta
+
+# # OTU
+# Pooled_Pl_Species_RA_t = Pooled_Pl_Species_RA_table %>% 
+#   column_to_rownames("sampleid") %>% 
+#   dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) %>% 
+#   t() %>% 
+#   as.data.frame()
+# Pooled_Pl_Species_RA_t
+```
+
+# rename OTU and meta tables
+
+```{r}
+Pooled_otu = Pooled_Pl_Species_RA_clr_splsda_2 # taxa should be rows
+Pooled_otu
+Pooled_meta = Pooled_Pl_Species_meta # rownames should be ids
+Pooled_meta
+```
+
+```{r}
+table(Pooled_meta$Study_name, Pooled_meta$Disease_status)
+```
+
+```{r}
+datasets = unique(Pooled_meta$Study_name)
+datasets
+```
+
+# Combining all datasets auroc
+
+```{r, fig.height=4, fig.width=4.5}
+sel_otu_num = nrow(Pooled_otu)-1
+#for (i in sel_otu_num) {
+thres_fs =  100
+Pooled_meta
+#rownames(Pooled_meta) <- Pooled_meta$sampleid
+Pooled_meta
+sc.obj.train_Pooled <- siamcat(feat=Pooled_otu, meta=Pooled_meta, label='Disease_status', case='ECC')
+  # normalize features
+sc.obj.train_Pooled <- normalize.features(sc.obj.train_Pooled, norm.method = 'pass',
+                                     feature.type = 'original')
+  # Create data split
+sc.obj.train_Pooled <- create.data.split(sc.obj.train_Pooled,
+                                    num.folds = 5, num.resample = num_resample)
+  # train lasso model
+sc.obj.train_Pooled <- train.model(sc.obj.train_Pooled,
+                                method= ml_method,
+                                perform.fs = F,
+                                param.set = param_set,
+                                param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'),
+                                verbose = 1)
+sc.obj.train_Pooled <- make.predictions(sc.obj.train_Pooled)
+sc.obj.train_Pooled <- evaluate.predictions(sc.obj.train_Pooled)
+# print
+#   (model.interpretation.plot(sc.obj.train_Pooled,
+#                              prompt = FALSE,
+#                              fn.plot = 'interpretation.pdf',
+#                              consens.thres = 0.5,
+#                               limits = c(-3, 3),
+#                               heatmap.type = 'zscore') )
+temp = eval_data(sc.obj.train_Pooled)
+
+sc.obj.train_Pooled_feat_wt = feature_weights(sc.obj.train_Pooled)
+#temp$roc
+sc.obj.train_Pooled_AUROC = format(temp$auroc, digits=2)
+auroc_plot = ggroc(temp$roc, colour = 'steelblue', size = 1, legacy.axes = TRUE) +
+  annotate("text", x=.8, y=0.2, label= paste("AUROC =", sc.obj.train_Pooled_AUROC)) +
+  ggtitle(paste(ggplot_title )) +
+  geom_abline() +
+  expand_limits(x = 0, y = 0) +
+  scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
+  theme(plot.title = element_text(color="red", size=14, face="bold.italic")) +
+  theme_bw()
+print(auroc_plot)
+# AUPRC plot
+sc.obj.train_Pooled_auprc = format(temp$auprc, digits=2)
+auprc_plot = ggroc(temp$roc, colour = 'steelblue', size = 1, legacy.axes = TRUE) +
+  annotate("text", x=.8, y=0.2, label= paste("auprc =", sc.obj.train_Pooled_auprc)) +
+  ggtitle(paste(ggplot_title)) +
+  geom_abline() +
+  expand_limits(x = 0, y = 0) +
+  scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
+  theme(plot.title = element_text(color="red", size=14, face="bold.italic")) +
+  theme_bw()
+print(auprc_plot )
+#}
+```
+
+# To print the time of code run completion till here
+
+```{r}
+end_time = Sys.time()
+end_time
+
+# Total time taken by this file to run
+
+total_time = difftime(end_time, start_time)
+total_time
+```
+
+# for parallelization registeration
+
+```{r}
+library(foreach)
+library(doParallel)
+
+cores=detectCores()
+cl <- makeCluster(cores[1]-2) #not to overload your computer
+registerDoParallel(cl)
+```
+
+# Siamcat cross validation and train-test
+
+```{r}
+# # create tibble to store all the predictions
+# auroc.all <- tibble(study.train=character(0),
+#                     AUC=double(0))
+
+# and a list to save the trained SIAMCAT objects
+
+sc.list = foreach(i = datasets, .multicombine=TRUE) %dopar% {
+  library(dplyr)
+library(tibble)
+library(ggplot2)
+library(DT)
+library(stringr)
+
+library(pROC) #ggroc
+library(ranger)
+
+library(SIAMCAT)
+  
+  # restrict to a single study
+  meta.train <- Pooled_meta %>% 
+    filter(Study_name==i) %>% 
+    as.data.frame()
+  #rownames(meta.train) <- meta.train$sampleid
+  
+  # create SIAMCAT object
+  sc.obj.train <- siamcat(feat=Pooled_otu, meta=meta.train, label='Disease_status', case='ECC')
+  # normalize features
+  sc.obj.train <- normalize.features(sc.obj.train, norm.method = 'pass',
+                                     feature.type = 'original')
+  # Create data split
+  sc.obj.train <- create.data.split(sc.obj.train,
+                                    num.folds = 5, num.resample = num_resample)
+  # train lasso model
+  sc.obj.train <- train.model(sc.obj.train, method= ml_method,
+                                perform.fs = F,
+                              param.set = param_set,
+                                param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'),
+                                verbose = 0)
+
+  
+  ## apply trained models to other datasets
+  #loop through datasets again
+
+      # # make and evaluate cross-validation predictions (on the same dataset)
+      # sc.obj.train <- make.predictions(sc.obj.train)
+      # sc.obj.train <- evaluate.predictions(sc.obj.train)
+      # auroc.all <- auroc.all %>%
+      #   add_row(study.train=i,
+      #           AUC=eval_data(sc.obj.train)$auroc %>% as.double())
+
+sc.obj.train
+  #save the trained model
+  #sc.list[[i]] <- sc.obj.train
+}
+
+names(sc.list) <- datasets
+```
+
+# To print the time of code run completion till here
+
+```{r}
+end_time = Sys.time()
+end_time
+
+# Total time taken by this file to run
+
+total_time = difftime(end_time, start_time)
+total_time
+```
+
+# Feature weights
+
+```{r, fig.height= 12, fig.width = 10 }
+weight.list <- list()
+for (d in datasets){
+  sc_obj <- sc.list[[d]]
+  # extract the feature weights out of the SIAMCAT object
+  temp <- feature_weights(sc_obj)
+  temp$OTUs <- rownames(temp)
+  # save selected info in the weight.list
+  weight.list[[d]] <- temp %>% 
+    dplyr::select(OTUs, median.rel.weight, mean.rel.weight, percentage) %>%
+    mutate(Study=d) %>%
+    mutate(r.med=rank(-abs(median.rel.weight)) )
+}
+# combine all feature weights into a single tibble
+df.weights <- bind_rows(weight.list)
+# df.weights <- df.weights %>% filter(!str_detect(OTUs, 'unclassified') )
+# df.weights
+# compute absolute feature weights
+abs.weights <- df.weights %>% 
+  dplyr::group_by(Study) %>% 
+  dplyr::summarise(sum.median=sum(abs(median.rel.weight)),
+            sum.mean=sum(abs(mean.rel.weight)),
+            .groups='drop')
+new_df_weight = df.weights %>% 
+  full_join(abs.weights) %>% 
+  # normalize by the absolute model size
+  mutate(median.rel.weight=median.rel.weight/sum.median) %>%
+  
+  # only include top 20 features
+  filter(r.med < 21) %>% 
+   
+  # highlight feature rank for the top 20 features
+  mutate(r.med=case_when(r.med > 20~NA_real_, TRUE~r.med)) %>%
+  # enforce the correct ordering by converting to factors again
+  #mutate(OTUs=factor(OTUs, levels = rev(OTUs.of.interest$OTUs))) %>% 
+  mutate(Study=factor(Study, levels = datasets))
+#to set the limits in ggplot scale_fill_gradient2
+limit_value = max(abs(min(new_df_weight$median.rel.weight)), abs(max(new_df_weight$median.rel.weight)))
+print(limit_value)
+p = new_df_weight %>%
+  #we added -ve sign before median.rel.weight bcz in paper -ve weights are for discease but here we show +ve weights for Disease
+  ggplot(aes(y=OTUs, x=Study, fill=-median.rel.weight)) + 
+    geom_tile() + 
+    #scale_fill_gradient2(low = 'orange4', high='dark green', mid = 'white',
+    scale_fill_gradient2(low = 'dark green', high='orange4', mid = 'white',
+      #limits=c(-0.25, 0.25),
+      limits=c(-limit_value, limit_value),
+      name='median\nrelative\nweights') +
+    theme_minimal() + 
+    geom_text(aes(label=r.med), col='black', size= 3) +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text( colour = "black", angle = 30, hjust = 1),
+          axis.text.y = element_text(colour = "black")) + 
+  ggtitle(ggplot_title ) +
+    xlab('') + ylab('') +
+    theme(axis.text = element_text(size=10)) 
+print(p)
+```
+
+# Select top n OTUs from sc.obj.train_Pooled_feat_wt
+
+```{r}
+sc.obj.train_Pooled_feat_wt
+sc.obj.train_Pooled_feat_wt_2 = sc.obj.train_Pooled_feat_wt %>% 
+    rownames_to_column("OTUs") %>% 
+  dplyr::select(OTUs, median.rel.weight, mean.rel.weight, percentage) %>%
+    mutate(Study="Pooled") %>%
+    mutate(r.med=rank(-abs(median.rel.weight)) ) %>% 
+    filter(r.med < 31) %>% 
+  arrange(r.med)
+sc.obj.train_Pooled_feat_wt_2
+```
+
+# Select OTUs in each study based on top n OTUs in pooled study
+
+```{r}
+df.weights_2 = df.weights %>% 
+  filter(OTUs %in% sc.obj.train_Pooled_feat_wt_2$OTUs) %>% 
+  `rownames<-`( NULL )
+df.weights_2
+```
+
+# Merge top n otus from Pooled and individual studies
+
+```{r}
+df_weights_Pooled_and_ind = rbind(sc.obj.train_Pooled_feat_wt_2,
+                                  df.weights_2)
+df_weights_Pooled_and_ind
+
+OTUs_levels = sc.obj.train_Pooled_feat_wt_2$OTUs
+# set order for study on x axis and OTUs on y-axis based on their rank in Pooled dataset
+df_weights_Pooled_and_ind %<>% 
+  mutate(OTUs = factor(OTUs, levels = OTUs_levels)) %>% 
+  mutate(Study = factor(Study, levels = c("Pooled", datasets))) %>% 
+  mutate(r.med = ifelse(median.rel.weight <= 0 , NA_real_, r.med) ) %>% 
+  mutate(r.med = as.integer(r.med))
+df_weights_Pooled_and_ind
+
+save(df_weights_Pooled_and_ind,
+     file = "./df_weights_Pooled_and_ind.RData")
+```
+
+# Try the code below with cleared environment
+
+```{r}
+#rm(list = ls())
+```
+
+## ggplot for feature ranks
+
+```{r, fig.height=9}
+
+load("./df_weights_Pooled_and_ind.RData")
+df_weights_Pooled_and_ind
+
+limit_value = max(abs(min(df_weights_Pooled_and_ind$median.rel.weight)), abs(max(df_weights_Pooled_and_ind$median.rel.weight)))
+print(limit_value)
+
+ 
+
+p = df_weights_Pooled_and_ind %>%
+  #we added -ve sign before median.rel.weight bcz in paper -ve weights are for disease but here we show +ve weights for Disease
+  ggplot(aes(y=OTUs, x=Study, fill=median.rel.weight)) + 
+    geom_tile(color = "black") + 
+    scale_fill_gradient2(low = 'dark green', high='orange4', mid = 'white',
+    limits=c(-limit_value, limit_value),
+      name='median\nrelative\nweights') +
+    theme_minimal() + 
+    geom_text(aes(label=r.med), col='black', size= 3) +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text( colour = "black", angle = 45, hjust = 1),
+          axis.text.y = element_text(colour = "black"),
+          axis.text = element_text(size=10),
+          axis.title=element_text(size=14,face="bold")
+          ) + 
+#  ggtitle(ggplot_title ) +
+    xlab('Studies') + ylab('Species-level OTUs')
+print(p)
+```
+
+<!-- # Try and delete later -->
+
+<!-- ```{r} -->
+
+<!-- #auroc.all_loop_lodo = foreach (top_feat_num = top_feat_num_c, .multicombine=TRUE) %dopar% { -->
+
+<!-- top_feat_num =  10 -->
+
+<!--   library(dplyr) -->
+
+<!-- library(tibble) -->
+
+<!-- library(ggplot2) -->
+
+<!-- library(DT) -->
+
+<!-- library(stringr) -->
+
+<!-- library(pROC) #ggroc -->
+
+<!-- library(ranger) -->
+
+<!-- library(SIAMCAT) -->
+
+<!--   auroc.all <- tibble(study.train=character(0), -->
+
+<!--                     Top_OTUs = as.character(0), -->
+
+<!--                     AUC=double(0)) -->
+
+<!-- #for (i in datasets) { -->
+
+<!--   i = "Agnello_2017" -->
+
+<!--   # restrict to a single study -->
+
+<!--   meta.train <- Pooled_meta %>%  -->
+
+<!--     filter(Study_name==i) %>%  -->
+
+<!--     as.data.frame() -->
+
+<!--   #rownames(meta.train) <- meta.train$sampleid -->
+
+<!--   # create SIAMCAT object -->
+
+<!--   sc.obj.train <- siamcat(feat=Pooled_otu, meta=meta.train, label='Disease_status', case='ECC') -->
+
+<!--   # normalize features -->
+
+<!--   sc.obj.train <- normalize.features(sc.obj.train, norm.method = 'pass', -->
+
+<!--                                      feature.type = 'original') -->
+
+<!--   # Create data split -->
+
+<!--   sc.obj.train <- create.data.split(sc.obj.train, -->
+
+<!--                                     num.folds = 5, num.resample = num_resample) -->
+
+<!--   # train lasso model -->
+
+<!--   sc.obj.train <- train.model(sc.obj.train, method= ml_method, -->
+
+<!--                                 perform.fs = F, -->
+
+<!--                               param.set = param_set, -->
+
+<!--                                 param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'), -->
+
+<!--                                 verbose = 0) -->
+
+<!--   # generate a trained model with fix number of feature/OTUs from the previous model -->
+
+<!--   sc.obj.train = max.fs.trained.sc.obj(sc.obj.train, max_fs=top_feat_num) -->
+
+<!--   ## apply trained models to other datasets -->
+
+<!--   #loop through datasets again -->
+
+<!--       # make and evaluate cross-validation predictions (on the same dataset) -->
+
+<!--       sc.obj.train <- make.predictions(sc.obj.train) -->
+
+<!--       sc.obj.train <- evaluate.predictions(sc.obj.train) -->
+
+<!--       auroc.all <- auroc.all %>% -->
+
+<!--         add_row(study.train=i, -->
+
+<!--                 Top_OTUs = as.character(top_feat_num), -->
+
+<!--                 AUC=eval_data(sc.obj.train)$auroc %>% as.double()) -->
+
+<!--   #save the trained model -->
+
+<!--   #sc.list[[i]] <- sc.obj.train -->
+
+<!--   meta.train_lodo <- Pooled_meta %>%  -->
+
+<!--     filter(!Study_name==i) %>%  -->
+
+<!--     as.data.frame() -->
+
+<!--   #rownames(meta.train_lodo) <- meta.train_lodo$sampleid -->
+
+<!--   # create SIAMCAT object -->
+
+<!--   sc.obj.train_lodo <- siamcat(feat=Pooled_otu, meta=meta.train_lodo, label='Disease_status', case='ECC') -->
+
+<!--   # normalize features -->
+
+<!--   sc.obj.train_lodo <- normalize.features(sc.obj.train_lodo, norm.method = 'pass', -->
+
+<!--                                      feature.type = 'original') -->
+
+<!--   # Create data split -->
+
+<!--   sc.obj.train_lodo <- create.data.split(sc.obj.train_lodo, -->
+
+<!--                                     num.folds = 5, num.resample = num_resample) -->
+
+<!--   # train lasso model -->
+
+<!--   sc.obj.train_lodo <- train.model(sc.obj.train_lodo, -->
+
+<!--                                    method= ml_method, -->
+
+<!--                                 perform.fs = F, -->
+
+<!--                                 param.set = param_set, -->
+
+<!--                                 param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'), -->
+
+<!--                                 verbose = 1) -->
+
+<!--   # generate a trained model with fix number of feature/OTUs from the previous model -->
+
+<!--   sc.obj.train_lodo = max.fs.trained.sc.obj(sc.obj.train_lodo, max_fs=top_feat_num) -->
+
+<!--   ## apply trained models to other datasets -->
+
+<!--       # make and evaluate on the external datasets -->
+
+<!--       # use meta.ind here, since we want only one sample per subject! -->
+
+<!--       meta.test_lodo <- Pooled_meta %>%  -->
+
+<!--         filter(Study_name==i) %>% -->
+
+<!--         as.data.frame() -->
+
+<!--       #rownames(meta.test_lodo) <- meta.test_lodo$sampleid -->
+
+<!--       sc.obj.test_lodo <- siamcat(feat=Pooled_otu, meta=meta.test_lodo, label='Disease_status', case='ECC') -->
+
+<!--       # make holdout predictions -->
+
+<!--       sc.obj.test_lodo <- make.predictions(sc.obj.train_lodo,  -->
+
+<!--                                       siamcat.holdout = sc.obj.test_lodo) -->
+
+<!--       sc.obj.test_lodo <- evaluate.predictions(sc.obj.test_lodo) -->
+
+<!--       auroc.all <- auroc.all %>%  -->
+
+<!--         add_row(study.train=paste0(i, "_LODO"), -->
+
+<!--                 Top_OTUs = as.character(top_feat_num), -->
+
+<!--                 AUC=eval_data(sc.obj.test_lodo)$auroc %>% as.double()) -->
+
+<!--   #} -->
+
+<!-- auroc.all -->
+
+<!-- #} -->
+
+<!-- auroc.all_loop_lodo_rbind = bind_rows(auroc.all_loop_lodo, .id = "column_label") -->
+
+<!-- auroc.all_loop_lodo_rbind -->
+
+<!-- ``` -->
+
+# To print the time of code run completion till here
+
+```{r}
+end_time = Sys.time()
+end_time
+
+# Total time taken by this file to run
+
+total_time = difftime(end_time, start_time)
+total_time
+```
+
+# LODO analysis
+
+```{r}
+# create tibble to store all the predictions
+
+  
+  auroc.all <- tibble(study.train=character(0),
+                    Top_OTUs = as.character(0),
+                    AUC=double(0))
+# and a list to save the trained SIAMCAT objects
+
+auroc.all_loop_lodo = foreach (top_feat_num = top_feat_num_c, .multicombine=TRUE) %:% 
+
+
+
+foreach (i = datasets, .multicombine=TRUE) %dopar% {
+    
+  library(dplyr)
+library(tibble)
+library(ggplot2)
+library(DT)
+library(stringr)
+library(pROC) #ggroc
+library(ranger)
+library(SIAMCAT)
+  # restrict to a single study
+  meta.train <- Pooled_meta %>% 
+    filter(Study_name==i) %>% 
+    as.data.frame()
+  #rownames(meta.train) <- meta.train$sampleid
+  
+  # create SIAMCAT object
+  sc.obj.train <- siamcat(feat=Pooled_otu, meta=meta.train, label='Disease_status', case='ECC')
+  # normalize features
+  sc.obj.train <- normalize.features(sc.obj.train, norm.method = 'pass',
+                                     feature.type = 'original')
+  # Create data split
+  sc.obj.train <- create.data.split(sc.obj.train,
+                                    num.folds = 5, num.resample = num_resample)
+  # train lasso model
+  sc.obj.train <- train.model(sc.obj.train, method= ml_method,
+                                perform.fs = F,
+                              param.set = param_set,
+                                param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'),
+                                verbose = 0)
+  # generate a trained model with fix number of feature/OTUs from the previous model
+  sc.obj.train = max.fs.trained.sc.obj(sc.obj.train, max_fs=top_feat_num)
+  
+  ## apply trained models to other datasets
+  #loop through datasets again
+
+      # make and evaluate cross-validation predictions (on the same dataset)
+      sc.obj.train <- make.predictions(sc.obj.train)
+      sc.obj.train <- evaluate.predictions(sc.obj.train)
+      auroc.all <- auroc.all %>%
+        add_row(study.train=i,
+                Top_OTUs = as.character(top_feat_num),
+                AUC=eval_data(sc.obj.train)$auroc %>% as.double())
+
+
+  #save the trained model
+  #sc.list[[i]] <- sc.obj.train
+      
+  meta.train_lodo <- Pooled_meta %>% 
+    filter(!Study_name==i) %>% 
+    as.data.frame()
+  #rownames(meta.train_lodo) <- meta.train_lodo$sampleid
+  
+  # create SIAMCAT object
+  sc.obj.train_lodo <- siamcat(feat=Pooled_otu, meta=meta.train_lodo, label='Disease_status', case='ECC')
+  # normalize features
+  sc.obj.train_lodo <- normalize.features(sc.obj.train_lodo, norm.method = 'pass',
+                                     feature.type = 'original')
+  # Create data split
+  sc.obj.train_lodo <- create.data.split(sc.obj.train_lodo,
+                                    num.folds = 5, num.resample = num_resample)
+  # train lasso model
+  sc.obj.train_lodo <- train.model(sc.obj.train_lodo,
+                                   method= ml_method,
+                                perform.fs = F,
+                                param.set = param_set,
+                                param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'),
+                                verbose = 1)
+  # generate a trained model with fix number of feature/OTUs from the previous model
+  sc.obj.train_lodo = max.fs.trained.sc.obj(sc.obj.train_lodo, max_fs=top_feat_num)
+  
+  ## apply trained models to other datasets
+  
+      # make and evaluate on the external datasets
+      # use meta.ind here, since we want only one sample per subject!
+      meta.test_lodo <- Pooled_meta %>% 
+        filter(Study_name==i) %>%
+        as.data.frame()
+      #rownames(meta.test_lodo) <- meta.test_lodo$sampleid
+      sc.obj.test_lodo <- siamcat(feat=Pooled_otu, meta=meta.test_lodo, label='Disease_status', case='ECC')
+      # make holdout predictions
+      sc.obj.test_lodo <- make.predictions(sc.obj.train_lodo, 
+                                      siamcat.holdout = sc.obj.test_lodo)
+      sc.obj.test_lodo <- evaluate.predictions(sc.obj.test_lodo)
+      auroc.all <- auroc.all %>% 
+        add_row(study.train=paste0(i, "_LODO"),
+                Top_OTUs = as.character(top_feat_num),
+                AUC=eval_data(sc.obj.test_lodo)$auroc %>% as.double())
+      
+  }
+auroc.all
+
+auroc.all_loop_lodo_rbind = bind_rows(auroc.all_loop_lodo, .id = "column_label")
+auroc.all_loop_lodo_rbind
+```
+
+# AUC for Pooled studies with selected number of OTUs
+
+```{r}
+
+auroc.all_loop_pooled = foreach (top_feat_num = top_feat_num_c) %dopar% {
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(DT)
+library(stringr)
+library(pROC) #ggroc
+library(ranger)
+library(SIAMCAT)
+    auroc.all <- tibble(study.train=character(0),
+                    Top_OTUs = as.character(0),
+                    AUC=double(0))
+  
+  # top_n_features = df.weights %>% 
+  # filter(r.med < top_feat_num)
+  # 
+  # Pooled_otu_2 = Pooled_otu %>% 
+  #   filter(rownames(.) %in% top_n_features$OTUs)
+  
+  
+
+  # restrict to a single study
+  meta.train <- Pooled_meta %>% 
+ #   filter(Study_name==i) %>% 
+    as.data.frame()
+  #rownames(meta.train) <- meta.train$sampleid
+  
+  # create SIAMCAT object
+  sc.obj.train <- siamcat(feat=Pooled_otu, meta=meta.train, label='Disease_status', case='ECC')
+  # normalize features
+  sc.obj.train <- normalize.features(sc.obj.train, norm.method = 'pass',
+                                     feature.type = 'original')
+  # Create data split
+  sc.obj.train <- create.data.split(sc.obj.train,
+                                    num.folds = 5, num.resample = num_resample)
+  # train lasso model
+  sc.obj.train <- train.model(sc.obj.train, method= ml_method,
+                                perform.fs = F,
+                              param.set = param_set,
+                                param.fs = list(no_features=thres_fs, method ="AUC", direction='absolute'),
+                                verbose = 0)
+  
+  # generate a trained model with fix number of feature/OTUs from the previous model
+  sc.obj.train = max.fs.trained.sc.obj(sc.obj.train, max_fs=top_feat_num)
+  
+  ## apply trained models to other datasets
+  #loop through datasets again
+
+      # make and evaluate cross-validation predictions (on the same dataset)
+      sc.obj.train <- make.predictions(sc.obj.train)
+      sc.obj.train <- evaluate.predictions(sc.obj.train)
+      auroc.all <- auroc.all %>%
+        add_row(study.train="Pooled_studies",
+                Top_OTUs = as.character(top_feat_num),
+                AUC=eval_data(sc.obj.train)$auroc %>% as.double())
+auroc.all
+}
+
+auroc.all_loop_pooled_rbind = bind_rows(auroc.all_loop_pooled, .id = "column_label")
+auroc.all_loop_pooled_rbind
+```
+
+# To print the time of code run completion till here
+
+```{r}
+end_time = Sys.time()
+end_time
+
+# Total time taken by this file to run
+
+total_time = difftime(end_time, start_time)
+total_time
+```
+
+# data for ggplot
+
+```{r}
+auroc.all_2 = rbind(auroc.all_loop_lodo_rbind, auroc.all_loop_pooled_rbind) %>% 
+  mutate(split=case_when(str_detect(study.train, "_LODO") ~'LODO',
+                         str_detect(study.train, "Pooled") ~'Pooled_studies',
+                         TRUE~'Individual_study')) %>% 
+  mutate(Top_OTUs = factor(Top_OTUs, levels = as.character( top_feat_num_c )))
+auroc.all_2
+
+# Assign a new name to the auroc table and save this object as a RData file
+assign(paste0("AUROC_", ggplot_title), auroc.all_2) %>% save(file = paste0("AUROC_", ggplot_title,".RData") )
+
+
+```
+
+# ggplot
+
+```{r}
+tileplot_p = 
+auroc.all_2 %>% 
+    ggplot(aes(x=study.train, y=Top_OTUs, fill=AUC)) +
+    geom_tile() + theme_minimal() +
+    # text in tiles
+    geom_text(aes_string(label="format(AUC, digits=2)"), 
+              col='black', size=4)+
+    # color scheme
+    scale_fill_gradientn(colours=rev(c('darkgreen','forestgreen', 
+                                       'chartreuse3','lawngreen', 
+                                       'yellow')), limits=c(0.5, 1)) + 
+    facet_grid( .~split , scales = 'free', space = 'free') +
+  scale_x_discrete(position='bottom') +
+    theme(axis.line=element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.text.x = element_text(size = 11, angle=60, hjust=0.9, vjust = 1),
+          axis.text.y = element_text(size = 11),
+          panel.grid=element_blank(), 
+          panel.border=element_blank(), 
+          strip.background = element_blank(), 
+          strip.text = element_blank(),
+          plot.title = element_text(color="black", size=14, face="bold")) +
+  labs(title=ggplot_title, 
+         y="Number of OTUs used in the models", x = "Dataset")
+print(tileplot_p)
+
+ggsave(paste0("AUROC_", ggplot_title,".png"),
+  plot = tileplot_p,
+  width = 22,
+  height = 12,
+  units = "cm",
+  dpi = 300)
+```
+
+# To plot ggoplot from the saved data
+
+# Load the appropriate file
+
+```{r}
+
+load(paste0("AUROC_", ggplot_title,".RData") )
+
+auroc.all_2 %>% 
+    ggplot(aes(x=study.train, y=Top_OTUs, fill=AUC)) +
+    geom_tile() + theme_minimal() +
+    # text in tiles
+    geom_text(aes_string(label="format(AUC, digits=2)"), 
+              col='black', size=4)+
+    # color scheme
+    scale_fill_gradientn(colours=rev(c('darkgreen','forestgreen', 
+                                       'chartreuse3','lawngreen', 
+                                       'yellow')), limits=c(0.5, 1)) + 
+    facet_grid( .~split , scales = 'free', space = 'free') +
+  scale_x_discrete(position='bottom') +
+    theme(axis.line=element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.text.x = element_text(size = 11, angle=60, hjust=0.9, vjust = 1),
+          axis.text.y = element_text(size = 11),
+          panel.grid=element_blank(), 
+          panel.border=element_blank(), 
+          strip.background = element_blank(), 
+          strip.text = element_blank(),
+          plot.title = element_text(color="black", size=14, face="bold")) +
+  labs(title=ggplot_title, 
+         y="Number of OTUs used in the models", x = "Dataset")
+print(tileplot_p)
+
+ggsave(paste0("AUROC_", ggplot_title,".png"),
+  plot = tileplot_p,
+  width = 22,
+  height = 12,
+  units = "cm",
+  dpi = 300)
+
+```
+
+# To print the time of code run completion till here
+
+```{r}
+end_time = Sys.time()
+end_time
+
+# Total time taken by this file to run
+
+total_time = difftime(end_time, start_time)
+total_time
+```
+
+#stop cluster
+
+```{r}
+stopCluster(cl)
+stopImplicitCluster()
+```
+
+
+```{r}
+# Your variable
+my_variable <- "some_data"
+
+# The new name you want to give to the RDS file
+new_name <- "my_new_file_name"
+
+# Saving the variable into an RDS file with the new name
+saveRDS(my_variable, paste0(new_name, ".rds"))
+```
+
+
+```{r}
+readRDS("my_new_file_name.rds")
+```
+

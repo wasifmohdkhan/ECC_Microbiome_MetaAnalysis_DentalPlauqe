@@ -1,0 +1,231 @@
+---
+title: "Species level modified microbiomeR ggplot for metanalysis on sPLSDA data"
+output: html_document
+date: '2022-09-20'
+---
+
+# Additional comments related to metamicrobiomeR
+
+1.  metamicrobiomeR does not work with the original Species name with brackets eg. Absconditabacteria\_[SR1]\_(G.1)\_bacterium_HMT_345. This can be taken care by 'check.names = T' option.
+2.  metamicrobiome need prefix k in front of taxonomic names
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(DT)
+library(plyr)
+library(gdata)
+library(ggpubr)
+library(cowplot)
+library(egg)
+library(phyloseq)
+```
+
+# Libraries
+
+```{r}
+library(metamicrobiomeR)
+library(phyloseq)
+library(microbiome)
+```
+
+# Import data
+
+```{r}
+in_dir  = "../../Plaque_Species/Species_221101_2_processed_data_files"
+#out_dir = "/home/wasif/Rproj_221101_Plaque_Species_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# Load the RA_clr_splsda file
+
+```{r}
+load(paste0(in_dir, "/Pooled_Pl_Species_RA_clr_splsda.RData"))
+Pooled_Pl_Species_RA_clr_splsda
+
+Pooled_Pl_Species_RA_clr_splsda = Pooled_Pl_Species_RA_clr_splsda %>% as.data.frame()
+Pooled_Pl_Species_RA_clr_splsda
+
+# modify OTU names according to metamicrobiomeR
+Pooled_Pl_Species_RA_clr_splsda = Pooled_Pl_Species_RA_clr_splsda %>% 
+  setNames(paste0('k__s_', names(.)))
+Pooled_Pl_Species_RA_clr_splsda
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_RA_table_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+Pooled_Pl_Species_RA_table_meta
+
+# # OTU
+# Pooled_Pl_Species_RA_table_OTU = Pooled_Pl_Species_RA_table %>% 
+#   column_to_rownames("sampleid") %>% 
+#   dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) %>% 
+#   setNames(paste0('k__s_', names(.))) # metamicrobiome need prefix k in front of taxonomic names
+# Pooled_Pl_Species_RA_table_OTU
+```
+
+```{r}
+Pooled_Pl_Species_RA_clr_splsda_meta_OTU = merge(Pooled_Pl_Species_RA_table_meta[ , c(1,6)],
+                                          Pooled_Pl_Species_RA_clr_splsda, by = "row.names") %>%
+  column_to_rownames("Row.names") 
+Pooled_Pl_Species_RA_clr_splsda_meta_OTU
+```
+
+# apply metamicrobiomeR::taxa.compare with for loop on each study
+
+```{r include=FALSE}
+Studies =  unique(Pooled_Pl_Species_RA_clr_splsda_meta_OTU$Study_name) %>% sort()
+Studies
+Taxa_compare_res = list()
+for (Study in Studies) {
+  Pooled_Pl_Species_RA_clr_splsda_meta_study = Pooled_Pl_Species_RA_clr_splsda_meta_OTU %>% 
+    filter(Study_name == Study) %>% 
+    dplyr::select(!Study_name)
+  # apply metamicrobiomeR::taxa.compare
+  Taxa_compare_res_study = taxa.compare(taxtab=Pooled_Pl_Species_RA_clr_splsda_meta_study,
+                         propmed.rel="lm",
+                         comvar="Disease_status",
+                         adjustvar=NULL,
+                         longitudinal="no",
+                         p.adjust.method="fdr")
+  Taxa_compare_res_study_2 = Taxa_compare_res_study %>% 
+    mutate(study =  Study) %>% 
+    mutate(pop = Study)
+  Taxa_compare_res[[Study]] = Taxa_compare_res_study_2
+}
+```
+
+# find common rows after taxa compare. to know the Species present in all joined datasets
+
+<https://www.r-bloggers.com/2012/06/intersect-for-multiple-vectors-in-r/> <https://stackoverflow.com/questions/13016359/how-to-directly-select-the-same-column-from-all-nested-lists-within-a-list>
+
+```{r}
+# For Inner Join
+Species_intersection <- Reduce( union, lapply(Taxa_compare_res, `[`, 1) )
+Species_intersection
+```
+
+```{r}
+Pooled_Pl_Species_RA_clr_Taxa_compare_res = bind_rows(Taxa_compare_res) %>% 
+  #filter(id %in% "k__bacteria.p__P.c__C.o__O.f__F.g__Actinomyces_dentalis")
+  filter(id %in% Species_intersection$id)
+Pooled_Pl_Species_RA_clr_Taxa_compare_res
+```
+
+# meta analysis
+
+```{r}
+Pooled_Pl_Species_RA_clr_meta_taxa= meta.taxa(taxcomdat=Pooled_Pl_Species_RA_clr_Taxa_compare_res,
+                                              summary.measure="RD",
+                                              pool.var="id",
+                                              studylab="study",
+                                              backtransform =FALSE,
+                                              percent.meta=0.4,
+                                              p.adjust.method="fdr")
+Pooled_Pl_Species_RA_clr_meta_taxa$random$Disease_statusECC
+```
+
+```{r}
+# metatab.show(metatab = Pooled_Pl_Species_RA_clr_meta_taxa$RA_clrndom,
+#                       com.pooled.tab = Pooled_Pl_Species_RA_clr_Taxa_compare_res,
+#                       #highest.lev = "p",
+#              sumvar = "path",
+#                       #tax.lev="l5",
+#                       showvar="Disease_statusECC",
+#                       p.cutoff.type="p",
+#                       p.cutoff=1,
+#                       display="table"
+#                       )
+
+Pooled_Pl_Species_RA_clr_metadat<-metatab.show(metatab = Pooled_Pl_Species_RA_clr_meta_taxa$random,
+                      com.pooled.tab = Pooled_Pl_Species_RA_clr_Taxa_compare_res,
+                      highest.lev = "s",
+             sumvar = "path",
+                      tax.lev="l1",
+                      showvar="Disease_statusECC",
+                      p.cutoff.type="p.adjust",
+                      p.cutoff=0.04,
+                      display="data"
+                      )
+Pooled_Pl_Species_RA_clr_metadat
+```
+
+```{r}
+
+meta.niceplot(metadat=Pooled_Pl_Species_RA_clr_metadat,
+              sumtype="taxa",
+              level="main",
+              p="p",
+              p.adjust="p.adjust",
+              phyla.col="black",
+              p.sig.heat="yes",
+              heat.forest.width.ratio =c(1,1.5),
+              leg.key.size=0.6,
+              leg.text.size=8,
+              heat.text.x.size=8,
+              heat.text.x.angle=10,
+              forest.axis.text.y=10,
+              forest.axis.text.x=8,
+              point.ratio = c(4,2),
+              line.ratio = c(2,1)
+              )
+
+```
+
+```{r}
+Pooled_Pl_Species_RA_clr_metadat
+```
+
+```{r}
+source("../../R_functions_wk/meta_niceplot_wk.R")
+
+png("./Pooled_Pl_Species_RA_clr_meta_niceplot.png",
+    width = 6,
+       height = 3,
+    units = "in",
+    res = 600)
+meta_niceplot_wk(metadat=Pooled_Pl_Species_RA_clr_metadat,
+              sumtype="taxa",
+              level="main",
+              p="p",
+              p.adjust="p.adjust",
+              phyla.col="black",
+              p.sig.heat="yes",
+              heat.text.x.angle=45
+
+              )
+
+# ggsave("./Pooled_Pl_Species_RA_clr_meta_niceplot",
+#       plot =  Pooled_Pl_Species_RA_clr_meta_niceplot,
+#        width = 600,
+#        height = 300,
+#        units = "px"
+# )
+
+dev.off()
+```

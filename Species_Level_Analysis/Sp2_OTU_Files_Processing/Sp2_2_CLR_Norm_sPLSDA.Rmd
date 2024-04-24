@@ -1,0 +1,275 @@
+---
+title: "Plaque_Species_level_RA_clr splsda"
+output: html_document
+date: '2022-09-14'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+```
+
+# libraries General
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(DT)
+library(phyloseq)
+library(ggplotify)
+library(cowplot)
+```
+
+# Libraries Speciesecific
+
+```{r}
+library(PCAtools) # for the command PCAtools::pca
+library(mixOmics)
+library(phyloseq)
+library(microbiome)
+library(PLSDAbatch)
+library(vegan) #varpart
+```
+
+```{r}
+in_dir  = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))
+Pooled_Pl_Species_meta
+
+# OTU
+# Pooled_Pl_Species_RA_t = Pooled_Pl_Species_RA_table %>% 
+#   column_to_rownames("sampleid") %>% 
+#   dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) %>% 
+#   t() %>% 
+#   as.data.frame()
+# Pooled_Pl_Species_RA_t
+```
+
+# import clr data
+```{r}
+load(paste0(out_dir, "/Pooled_Pl_Species_RA_clr.RData"))
+Pooled_Pl_Species_RA_clr
+```
+
+#  pca option
+
+```{r}
+
+Pooled_Pl_Species_RA_OTU_mixOmics_pca_clr <- mixOmics::pca(Pooled_Pl_Species_RA_clr, scale = T,
+                                                            center = T,
+                                                            ncomp = 3,
+                                                            )
+```
+
+```{r}
+plot_before_splsda = 
+mixOmics::plotIndiv(Pooled_Pl_Species_RA_OTU_mixOmics_pca_clr,
+                    group=Pooled_Pl_Species_meta$Study_name, 
+                    ind.names = F,
+                    legend=T,
+                    point.lwd = 0.7,
+                    pch = as.numeric(factor(Pooled_Pl_Species_meta$Disease_status))+14,
+                    pch.levels=(Pooled_Pl_Species_meta$Disease_status), ellipse = TRUE, 
+                    title="Before batch correction",legend.title = "Study_name", 
+                    legend.title.pch = "Disease_status",
+                    size.legend = rel(2.4),
+                    size.legend.title = rel(1.0),
+                    size.title = rel(1.2)
+                    )
+```
+```{r}
+plot_before_splsda_gg = plot_before_splsda$graph +theme(legend.position="none")
+```
+
+
+# check if the row names in metadata and OTU files are the same
+
+```{r}
+identical(row.names(Pooled_Pl_Species_meta), row.names(Pooled_Pl_Species_RA_clr))
+```
+
+# Set batches and disease_status
+
+```{r}
+Pooled_Disease_status = as.factor(Pooled_Pl_Species_meta$Disease_status)
+Pooled_Disease_status
+Pooled_Study_name = as.factor(Pooled_Pl_Species_meta$Study_name)
+Pooled_Study_name
+```
+
+
+# The optimal number of components
+
+```{r}
+Pooled_Pl_Species_RA_clr_Disease_status.tune <- mixOmics::plsda(X = Pooled_Pl_Species_RA_clr, Y = Pooled_Disease_status, ncomp = 5)
+Pooled_Pl_Species_RA_clr_Disease_status.tune$prop_expl_var #1
+```
+
+```{r}
+Pooled_Pl_Species_RA_clr_Study_name.tune <- PLSDA_batch(X = Pooled_Pl_Species_RA_clr, 
+                             Y.trt = Pooled_Disease_status, Y.bat = Pooled_Study_name,
+                             ncomp.trt = 1, ncomp.bat = 10)
+Pooled_Pl_Species_RA_clr_Study_name.tune$explained_variance.bat  #3 # the sum to top 2 Y values give a variance of 1 #see the next code 
+```
+
+```{r}
+sum(Pooled_Pl_Species_RA_clr_Study_name.tune$explained_variance.bat$Y[1:4])
+```
+
+# To correct the Pooled_Pl_Species_RA_clr\_ data with PLSDA-batch
+
+```{r}
+Pooled_Pl_Species_RA_clr_plsda_batch.correct <- PLSDA_batch(X = Pooled_Pl_Species_RA_clr, 
+                                      Y.trt = Pooled_Disease_status, Y.bat = Pooled_Study_name, 
+                                      ncomp.trt = 1, ncomp.bat = 4)
+Pooled_Pl_Species_RA_clr_plsda_batch <- Pooled_Pl_Species_RA_clr_plsda_batch.correct$X.nobatch
+Pooled_Pl_Species_RA_clr_plsda_batch %>% datatable()
+```
+
+# sPLSDA-batch The optimal number of variables to select per component
+
+```{r}
+set.seed(789)
+Pooled_Pl_Species_RA_clr_test.keepX = c(seq(1, 10, 1), seq(20, ncol(Pooled_Pl_Species_RA_clr), 10)) #number of OTUs
+Pooled_Pl_Species_RA_clr_test.keepX
+Pooled_Pl_Species_RA_clr_Disease_status.tune.v <- tune.splsda(X = Pooled_Pl_Species_RA_clr, Y = Pooled_Disease_status, 
+                             ncomp = 1, test.keepX = Pooled_Pl_Species_RA_clr_test.keepX, 
+                             validation = 'Mfold', folds = 4, nrepeat = 50)
+Pooled_Pl_Species_splsda_choice_keepX = Pooled_Pl_Species_RA_clr_Disease_status.tune.v$choice.keepX 
+Pooled_Pl_Species_splsda_choice_keepX
+```
+
+```{r}
+Pooled_Pl_Species_RA_clr_splsda.correct <- PLSDA_batch(X = Pooled_Pl_Species_RA_clr, 
+                                       Y.trt = Pooled_Disease_status, Y.bat = Pooled_Study_name, 
+                                       ncomp.trt = 1, keepX.trt = Pooled_Pl_Species_splsda_choice_keepX, 
+                                       ncomp.bat = 4)
+Pooled_Pl_Species_RA_clr_splsda <- Pooled_Pl_Species_RA_clr_splsda.correct$X.nobatch
+Pooled_Pl_Species_RA_clr_splsda %>%  datatable()
+```
+# Save the sPLSDA batch corrected table
+```{r}
+save(Pooled_Pl_Species_RA_clr_splsda, file = paste0(out_dir, "/Pooled_Pl_Species_RA_clr_splsda.RData"))
+```
+
+
+#  pca option
+
+```{r}
+
+Pooled_Pl_Species_RA_clr_splsda_pca <- mixOmics::pca(Pooled_Pl_Species_RA_clr_splsda, scale = T,
+                                                            center = T,
+                                                            ncomp = 3,
+                                                            )
+```
+
+```{r}
+plot_after_splsda = 
+mixOmics::plotIndiv(Pooled_Pl_Species_RA_clr_splsda_pca,
+                    group=Pooled_Pl_Species_meta$Study_name, 
+                    ind.names = F,
+                    legend=T,
+                    point.lwd = 0.7,
+                    pch = as.numeric(factor(Pooled_Pl_Species_meta$Disease_status))+14,
+                    pch.levels=(Pooled_Pl_Species_meta$Disease_status),
+                    ellipse = TRUE, 
+                    title="After sPLSDA batch correction",
+                    legend.title = "Study_name", 
+                    legend.title.pch = "Disease_status",
+                    size.legend = rel(2.4),
+                    size.legend.title = rel(1.0),
+                    size.title = rel(1.2),
+                    legend.position = "bottom",
+                    )
+```
+```{r}
+plot_after_splsda
+```
+
+```{r}
+plot_after_splsda_gg = plot_after_splsda$graph +theme(legend.position="none")
+```
+
+```{r}
+
+legend = get_legend( plot_after_splsda$graph +theme(legend.position="top"))
+
+# build grid without legends
+pgrid <- plot_grid(plot_before_splsda_gg, plot_after_splsda_gg, ncol = 2)
+# add legend
+p <- plot_grid(
+  legend,
+  plot_grid(plot_before_splsda_gg, plot_after_splsda_gg, ncol = 2),
+  ncol = 1,
+  rel_heights = c(0.15, 1) # Adjust these values to change the relative heights of the legend and plots
+)
+p
+ggsave("before_n_after_splsda.png",
+       dpi = 300,
+       height = 5,
+       width = 10)
+```
+```{r}
+legend
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

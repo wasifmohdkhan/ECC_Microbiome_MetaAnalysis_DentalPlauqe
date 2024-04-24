@@ -1,0 +1,141 @@
+---
+title: "Species level Upset plot"
+output: html_document
+date: '2022-11-30'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+set.seed(23456)
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(metamicrobiomeR)
+library(phyloseq)
+library(ComplexUpset)
+```
+
+
+```{r}
+getwd()
+```
+
+```{r}
+in_dir  = "../../Plaque_Species/Species_221101_2_processed_data_files"
+out_dir = "../../Plaque_Species/Species_221208_5_Upset_plots"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+## Separate OTU and metadata
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name)) #%>% 
+Pooled_Pl_Species_meta
+
+# OTU
+Pooled_Pl_Species_RA = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))  #%>% 
+  #mutate_all(., function(x) {x*10^7}) %>%
+  #mutate_all(., function(x) {x+1}) %>%
+  #mutate_all(., function(x) {as.integer(x)})
+Pooled_Pl_Species_RA
+Pooled_Pl_Species_RA_t =  Pooled_Pl_Species_RA %>%
+  t() %>%
+  as.data.frame()
+Pooled_Pl_Species_RA_t
+```
+# Data for upset plot
+```{r}
+datasets = unique(Pooled_Pl_Species_meta$Study_name)
+datasets
+```
+
+
+# Try the function code
+```{r}
+x = "DeJesus_2020"
+  study_OTUs = Pooled_Pl_Species_RA_t %>% 
+           dplyr::select(filter(Pooled_Pl_Species_meta, Study_name == x) %>% row.names )
+  study_OTUs_filt = study_OTUs %>% 
+    filter(rowSums(study_OTUs) != 0) %>% 
+    row.names
+
+  df = data.frame(OTUs = study_OTUs_filt)
+  df[, x] =1
+  df
+```
+```{r}
+#Pooled_Pl_Species_otu_list = list()
+
+extract_otu_fn = function(x){
+  study_OTUs = Pooled_Pl_Species_RA_t %>% 
+           dplyr::select(filter(Pooled_Pl_Species_meta, Study_name == x) %>% row.names )
+  study_OTUs_filt = study_OTUs %>% 
+    filter(rowSums(study_OTUs) != 0) %>% # filter rows which have all zeros
+    row.names
+
+  df = data.frame(OTUs = study_OTUs_filt)
+  df[, x] = 1
+  df
+}
+
+Pooled_Pl_Species_otu_list = purrr::map(unique(Pooled_Pl_Species_meta$Study_name), extract_otu_fn)
+
+Pooled_Pl_Species_otu_list
+
+UpSet_df = Pooled_Pl_Species_otu_list %>% 
+  purrr::reduce(left_join, by = "OTUs") %>% 
+  replace(is.na(.), 0) %>% 
+  column_to_rownames("OTUs")
+UpSet_df
+```
+
+
+# Upset
+```{r dpi = 600}
+
+library(UpSetR)
+upset_plot =  UpSet_df %>%
+UpSetR::upset(sets  = rev(datasets),
+                keep.order = T,
+                sets.x.label = "Total OTUs",
+                mainbar.y.label = "Shared OTUs",
+             #main.bar.color = "darkgray",
+             sets.bar.color = "darkgray",
+              #matrix.color = "darkgray",
+                point.size = 4,
+                mb.ratio = c(0.65, 0.35),
+                text.scale = 1.5)
+
+upset_plot
+
+png(filename = paste0(out_dir, "/Species_level_UpSetR_plot.png"),
+    res = 400, width = 20, height = 9.5, units = "cm", pointsize = 10)
+upset_plot
+dev.off()
+```
+## from
+### https://github.com/krassowski/complex-upset/issues/132
+
+

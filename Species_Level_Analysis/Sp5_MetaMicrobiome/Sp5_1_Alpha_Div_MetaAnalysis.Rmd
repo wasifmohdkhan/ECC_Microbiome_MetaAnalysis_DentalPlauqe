@@ -1,0 +1,378 @@
+---
+title: "Species level Forest plot for Shannon"
+output: html_document
+date: '2022-11-30'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+rm(list = ls())
+set.seed(23456)
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(metamicrobiomeR)
+library(phyloseq)
+```
+
+
+```{r}
+getwd()
+```
+
+```{r}
+in_dir  = "../../Plaque_Species/Species_221101_2_processed_data_files"
+#out_dir = "/home/wasif/Rproj_221101_Plaque_Genus_Species_metaanalysis/Plaque_Species/Species_221101_2_processed_data_files"
+```
+
+# Import data
+
+```{r}
+Pooled_Pl_Species_RA_table = read.table(paste0(in_dir, "/Plaque_Species_relative_abundance_OTU_table_with_meta_data.txt"),
+                                   header = T,
+                                   sep = "\t",
+                                  check.names = F )
+Pooled_Pl_Species_RA_table
+```
+
+# separate OTU and metadata
+
+```{r}
+# Meta
+Pooled_Pl_Species_meta = Pooled_Pl_Species_RA_table %>% 
+  mutate(Sample_id =  sampleid) %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name, Sample_id)) %>% 
+  mutate(Disease_status = as.factor(Disease_status)) %>% 
+  mutate(age.sample =  72)
+Pooled_Pl_Species_meta
+
+# OTU
+Pooled_Pl_Species_RA = Pooled_Pl_Species_RA_table %>% 
+  column_to_rownames("sampleid") %>% 
+  dplyr::select(!c(Disease_status ,Host_age, Host_sex, Sample_type, Geo_location, Study_name))  %>% 
+  mutate_all(., function(x) {x*10^7}) %>%
+  #mutate_all(., function(x) {x+1}) %>%
+  mutate_all(., function(x) {as.integer(x)})
+Pooled_Pl_Species_RA
+
+# Pooled_Pl_Species_RA_t =  Pooled_Pl_Species_RA %>% 
+#   t() %>% 
+#   as.data.frame()
+# Pooled_Pl_Species_RA_t
+```
+
+# rename OTU and meta tables
+```{r}
+Pooled_otu = Pooled_Pl_Species_RA # taxa should be rows
+Pooled_otu
+Pooled_meta = Pooled_Pl_Species_meta # rownames should be ids
+Pooled_meta
+```
+
+# make a phyloseq object
+```{r}
+Pooled_physeq = phyloseq(otu_table(Pooled_otu,taxa_are_rows = F),
+                         sample_data(Pooled_meta) )
+Pooled_physeq
+```
+# Alpha diversity
+```{r}
+Pooled_a_div = data.frame(
+ # "Observerd" = estimate_richness(Pooled_physeq, measures = "Observed"),
+  "Chao1" = estimate_richness(Pooled_physeq, measures = "Chao1"),
+  "Shannon" = estimate_richness(Pooled_physeq, measures = "Shannon"),
+  Study_name = sample_data(Pooled_physeq)$Study_name
+)
+Pooled_a_div
+```
+```{r}
+# Try without split
+# estimate_richness(Pooled_physeq, measures = "Observed", split = F)
+```
+
+# Separate the diversity first by study and then by measure
+```{r}
+# Testing for the function below
+#  a = Pooled_a_div %>% 
+#     filter(Study_name == "Agnello_2017") %>% 
+#     dplyr::select(Chao1.Chao1) %>%
+#   t() %>% 
+#   as.data.frame() %>% 
+#   mutate("sequences.per.sample" = 1000000) %>% 
+#   relocate(sequences.per.sample) %>% 
+#   rownames_to_column("x")
+# 
+# assign("chao", a)
+
+```
+
+# a slight change in alpha.compare function cahnge in line containing tolower
+```{r}
+alpha.compare<-function(datlist,depth,mapfile,mapsampleid,comvar,adjustvar,personid="personid", longitudinal="yes",age.limit=1000000,standardize=FALSE,...){
+  #sapply(c("lme4","lmerTest","plyr","dplyr",'reshape2'), require, character.only = TRUE)
+  alphamean<-matrix(NA, nrow=length(names(datlist)),ncol=(ncol(datlist[[1]])-3))
+  rownames(alphamean)<-names(datlist)
+  colnames(alphamean)<-colnames(datlist[[1]])[-c(1:3)]
+  for (i in 1: length(names(datlist))){
+    dat.a<-datlist[[i]]
+    raredepth<-unique(dat.a$sequences.per.sample)[as.numeric(as.character(depth))]
+    if (depth=="max"){
+      raredepth<-max(unique(dat.a$sequences.per.sample))
+    }
+    dat.a[,-c(1:3)]<-lapply(dat.a[,-c(1:3)],as.character)
+    dat.a[,-c(1:3)]<-lapply(dat.a[,-c(1:3)],as.numeric)
+    dat.mean<-plyr::ddply(dat.a, plyr::.(sequences.per.sample), plyr::colwise(mean))
+    alphamean[i,]<-matrix(unlist(dat.mean[dat.mean$sequences.per.sample==raredepth,-c(1:3)]),nrow=1)
+  }
+  alphamean<-as.data.frame(t(alphamean))
+  alphamean$sampleid<-sub('.*x', '', rownames(alphamean)) #dirty fix to remove added x to samplenames started with number e.g. Haiti data
+  #standardize alpha
+  alphameans<-dplyr::mutate_at(alphamean,.vars=names(datlist),.funs=function(x){(x-mean(x,na.r=T))/sd(x,na.rm=T)})
+  #mapfile[,mapsampleid]<-tolower(mapfile[,mapsampleid]) #### change made by wasif
+  #get sample only in mapfile (all age)
+  alphamean<-alphamean[alphamean$sampleid %in% mapfile[,mapsampleid],]
+  alphameans<-alphameans[alphameans$sampleid %in% mapfile[,mapsampleid],]
+  #merge with mapfile
+  #apply age limit for comparison
+  mapfile<-mapfile[mapfile$age.sample<=age.limit,]
+  if (standardize==FALSE){
+    alphamap<-merge(mapfile,alphamean,by.x=mapsampleid,by.y="sampleid")
+  }
+  if (standardize==TRUE){
+    alphamap<-merge(mapfile,alphameans,by.x=mapsampleid,by.y="sampleid")
+  }
+  if (longitudinal=="yes"){
+    alphamap$personid<-as.factor(alphamap[,personid])
+  }
+  alphasum<-NULL
+  for (j in 1: length(names(datlist))){
+    #mixed model
+    if (longitudinal=="yes"){
+      fitsum<-try(summary(lme4::glmer(as.formula(paste(names(datlist)[j],paste(c(comvar,adjustvar,"(1|personid)"),collapse="+"),sep="~")), data=alphamap,family=gaussian(link="identity"))))
+    }
+    #linear model
+    if (longitudinal=="no"){
+      fitsum<-try(summary(glm(as.formula(paste(names(datlist)[j],paste(c(comvar,adjustvar),collapse="+"),sep="~")), data=alphamap,family="gaussian")))
+    }
+    if (class(fitsum) == "try-error") {
+      cat("Error in model fit, NA introduced.\n")
+      fitcoefw<-NULL
+      alphasum<-plyr::rbind.fill(alphasum,fitcoefw)
+    }
+    if (class(fitsum) != "try-error") {
+      fitcoef<-as.data.frame(fitsum$coefficients[rownames(fitsum$coefficients)!="(Intercept)",]) #remove intercept
+      if (longitudinal=="yes"){
+        fitcoef[,"Pr(>|t|)"]<-2*pnorm(-abs(fitcoef[,"Estimate"]/fitcoef[,"Std. Error"]))
+      }
+      fitcoef[,"varname"]<-rownames(fitcoef)
+      fitcoef[,"id"]<-names(datlist)[j]
+      fitcoefw<-reshape(fitcoef, idvar="id", timevar="varname", direction="wide")
+      alphasum<-plyr::rbind.fill(alphasum,fitcoefw)
+    }
+  }
+  if (standardize==TRUE){
+    return(list(alphamean=alphamean,alphamean.standardized=alphameans,alphasum=alphasum))
+  }
+  if (standardize==FALSE){
+    return(list(alphamean=alphamean,alphasum=alphasum))
+  }
+}
+```
+
+```{r}
+fun_extract_alph_div_t = function( which_alpha_div = "Chao1.Chao1", study_name){
+   a = Pooled_a_div %>% 
+    filter(Study_name == study_name) %>% 
+    dplyr::select(which_alpha_div) %>%
+  t() %>% 
+  as.data.frame() %>% 
+  mutate("sequences.per.sample" = 1000000) %>% 
+     mutate("iteration" = 1) %>% 
+  relocate(sequences.per.sample, iteration) %>% 
+  rownames_to_column("x")
+return(a)
+}
+```
+
+```{r}
+unique(Pooled_meta$Study_name)
+```
+
+```{r}
+Agnello_2017_a_div = list()
+Agnello_2017_a_div[["chao"]] = fun_extract_alph_div_t(which_alpha_div = "Chao1.Chao1", study_name = "Agnello_2017")
+Agnello_2017_a_div[["shannon"]] = fun_extract_alph_div_t(which_alpha_div = "Shannon",  study_name = "Agnello_2017")
+
+Agnello_2017_a_div
+
+
+# alpha compare
+
+Agnello_2017_alphacom <- alpha.compare(datlist=Agnello_2017_a_div,
+                          depth="max",
+                          mapfile=Pooled_meta,
+                          mapsampleid="Sample_id",
+                          comvar="Disease_status",
+                          adjustvar=NULL,
+                          longitudinal="no",
+                          standardize=TRUE)
+Agnello_2017_alphacom$alphasum
+Agnello_2017_alphacom$alphasum["pop"] =  "Agnello_2017"
+Agnello_2017_alphacom$alphasum
+```
+```{r}
+DeJesus_2020_a_div = list()
+DeJesus_2020_a_div[["chao"]] = fun_extract_alph_div_t(which_alpha_div = "Chao1.Chao1", study_name = "DeJesus_2020")
+DeJesus_2020_a_div[["shannon"]] = fun_extract_alph_div_t(which_alpha_div = "Shannon",  study_name = "DeJesus_2020")
+
+DeJesus_2020_a_div
+
+
+# alpha compare
+
+DeJesus_2020_alphacom <- alpha.compare(datlist=DeJesus_2020_a_div,
+                          depth="max",
+                          mapfile=Pooled_meta,
+                          mapsampleid="Sample_id",
+                          comvar="Disease_status",
+                          adjustvar=NULL,
+                          longitudinal="no",
+                          standardize=TRUE)
+DeJesus_2020_alphacom$alphasum
+DeJesus_2020_alphacom$alphasum["pop"] =  "DeJesus_2020"
+DeJesus_2020_alphacom$alphasum
+```
+
+```{r}
+Gomez_2017_a_div = list()
+Gomez_2017_a_div[["chao"]] = fun_extract_alph_div_t(which_alpha_div = "Chao1.Chao1", study_name = "Gomez_2017")
+Gomez_2017_a_div[["shannon"]] = fun_extract_alph_div_t(which_alpha_div = "Shannon",  study_name = "Gomez_2017")
+
+Gomez_2017_a_div
+
+
+# alpha compare
+
+Gomez_2017_alphacom <- alpha.compare(datlist=Gomez_2017_a_div,
+                          depth="max",
+                          mapfile=Pooled_meta,
+                          mapsampleid="Sample_id",
+                          comvar="Disease_status",
+                          adjustvar=NULL,
+                          longitudinal="no",
+                          standardize=TRUE)
+Gomez_2017_alphacom$alphasum
+Gomez_2017_alphacom$alphasum["pop"] =  "Gomez_2017"
+Gomez_2017_alphacom$alphasum
+```
+
+
+```{r}
+Kalpana_2020_a_div = list()
+Kalpana_2020_a_div[["chao"]] = fun_extract_alph_div_t(which_alpha_div = "Chao1.Chao1", study_name = "Kalpana_2020")
+Kalpana_2020_a_div[["shannon"]] = fun_extract_alph_div_t(which_alpha_div = "Shannon",  study_name = "Kalpana_2020")
+
+Kalpana_2020_a_div
+
+
+# alpha compare
+
+Kalpana_2020_alphacom <- alpha.compare(datlist=Kalpana_2020_a_div,
+                          depth="max",
+                          mapfile=Pooled_meta,
+                          mapsampleid="Sample_id",
+                          comvar="Disease_status",
+                          adjustvar=NULL,
+                          longitudinal="no",
+                          standardize=TRUE)
+Kalpana_2020_alphacom$alphasum
+Kalpana_2020_alphacom$alphasum["pop"] =  "Kalpana_2020"
+Kalpana_2020_alphacom$alphasum
+```
+
+
+```{r}
+Teng_2015_a_div = list()
+Teng_2015_a_div[["chao"]] = fun_extract_alph_div_t(which_alpha_div = "Chao1.Chao1", study_name = "Teng_2015")
+Teng_2015_a_div[["shannon"]] = fun_extract_alph_div_t(which_alpha_div = "Shannon",  study_name = "Teng_2015")
+
+Teng_2015_a_div
+
+
+# alpha compare
+
+Teng_2015_alphacom <- alpha.compare(datlist=Teng_2015_a_div,
+                          depth="max",
+                          mapfile=Pooled_meta,
+                          mapsampleid="Sample_id",
+                          comvar="Disease_status",
+                          adjustvar=NULL,
+                          longitudinal="no",
+                          standardize=TRUE)
+Teng_2015_alphacom$alphasum
+Teng_2015_alphacom$alphasum["pop"] =  "Teng_2015"
+Teng_2015_alphacom$alphasum
+```
+# rbind all datasets
+```{r}
+pooled_alpha_div_TE_seTE = 
+rbind(Agnello_2017_alphacom$alphasum,
+      DeJesus_2020_alphacom$alphasum,
+      Gomez_2017_alphacom$alphasum,
+      Kalpana_2020_alphacom$alphasum,
+      Teng_2015_alphacom$alphasum)
+pooled_alpha_div_TE_seTE
+```
+
+
+```{r, fig.width=8}
+# shannon.sex <- meta::metagen(`fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Estimate`,
+#                              `fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Std. Error`,
+#                              studlab=pop,
+#                              data=subset(pooled_alpha_div_TE_seTE,id=="shannon"),sm="RD", backtransf=FALSE)
+# 
+# meta::forest(shannon.sex,smlab="shannon \n diversity difference",
+#              sortvar=subset(pooled_alpha_div_TE_seTE,id=="shannon")$pop,
+#              lwd=2,
+#              )
+```
+
+
+```{r, fig.width=8}
+shannon.sex <- meta::metagen(`fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Estimate`,
+                             `fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Std. Error`,
+                             studlab=pop,
+                             data=subset(pooled_alpha_div_TE_seTE,id=="shannon"),sm="RD", backtransf=FALSE)
+
+meta::forest(shannon.sex,
+             smlab="Shannon \n diversity difference",
+             sortvar=subset(pooled_alpha_div_TE_seTE,id=="shannon")$pop,
+             lwd=2,
+             common = F,
+             xlab = "log odd ratio")
+```
+
+```{r, fig.width=8}
+# chao.sex <- meta::metagen(`fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Estimate`,
+#                              `fitsum$coefficients[rownames(fitsum$coefficients) != "(Intercept)", ].Std. Error`,
+#                              studlab=pop,
+#                              data=subset(pooled_alpha_div_TE_seTE,id=="chao"),sm="RD", backtransf=FALSE)
+# 
+# meta::forest(chao.sex,smlab="chao \n diversity difference",
+#              sortvar=subset(pooled_alpha_div_TE_seTE,id=="chao")$pop,
+#              lwd=2,
+#              common = F)
+
+# Chao diversity should include rare taxa but we have already removed rare taxa so ideally chao should not be calculated
+```
+
+
