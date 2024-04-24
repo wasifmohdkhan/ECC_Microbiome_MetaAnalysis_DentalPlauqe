@@ -8,8 +8,16 @@ Early childhood caries is a multifactorial disease with microbiome playing a sig
 
 -   The codes are given in Rmarkdown format (.Rmd).
 
--   Some of the codes are a mix of bash and R commands. This can be identified by the code chunks in Rmd files.
+- Some of the codes are a mix of bash and R commands. This can be identified by the code chunks in Rmd files.
 
-    -   The R code chunk starts with \`\`\`{r}
+    - The R code chunk starts with 
 
-    -   The bash code chunk starts with \`\`\`{bash}
+    ```
+    ```{r}
+    ```
+
+    - The bash code chunk starts with 
+
+    ```
+    ```{bash}
+    ```
